@@ -61,6 +61,10 @@ class GMCLinkManager:
         
         # Store depth estimates for each track (meters)
         self.depth_estimates: Dict[int, float] = {}
+        
+        # Store sequence of 8D motion vectors (8 frames x 8 features)
+        self.motion_sequences: Dict[int, List[np.ndarray]] = {}
+        self.sequence_length = 8
 
     def process_frame(
         self,
@@ -186,7 +190,7 @@ class GMCLinkManager:
                 smoothed_v = np.zeros(4, dtype=np.float32)
                 dx, dy, dw, dh = 0.0, 0.0, 0.0, 0.0
 
-            # Build 8D Spatial-Motion Vector
+            # Build 8D Spatial-Motion Vector [V_x, V_y, Δw, Δh, c_x, c_y, w, h]
             w_n = curr_w / float(img_w)
             h_n = curr_h / float(img_h)
             cx_n = curr_centroid[0] / float(img_w)
@@ -195,6 +199,13 @@ class GMCLinkManager:
             spatial_motion = np.array(
                 [dx, dy, dw, dh, cx_n, cy_n, w_n, h_n], dtype=np.float32
             )
+            
+            if tid not in self.motion_sequences:
+                self.motion_sequences[tid] = []
+            
+            self.motion_sequences[tid].append(spatial_motion)
+            if len(self.motion_sequences[tid]) > self.sequence_length:
+                self.motion_sequences[tid].pop(0)
 
             track_ids.append(tid)
             compensated_velocities.append(spatial_motion)
@@ -202,13 +213,21 @@ class GMCLinkManager:
         if not compensated_velocities:
             return {}, {}
 
-        # Align motion with language
-        motion_tensor = torch.tensor(
-            np.array(compensated_velocities), dtype=torch.float32
+        # Build sequence tensors: (Batch, 8, 8)
+        motion_sequences_batch = []
+        for tid in track_ids:
+            seq = self.motion_sequences[tid]
+            if len(seq) < self.sequence_length:
+                padding = [np.zeros(8, dtype=np.float32)] * (self.sequence_length - len(seq))
+                seq = padding + seq
+            motion_sequences_batch.append(np.stack(seq))
+        
+        sequence_tensor = torch.tensor(
+            np.array(motion_sequences_batch), dtype=torch.float32
         ).to(self.device)
 
         with torch.no_grad():
-            logits = self.aligner(motion_tensor, language_embedding.to(self.device))
+            logits = self.aligner(sequence_tensor, language_embedding.to(self.device))
 
         raw_scores = torch.sigmoid(logits).cpu().numpy().flatten()
 
@@ -231,5 +250,7 @@ class GMCLinkManager:
                 del self.wh_history[d]
             if d in self.depth_estimates:
                 del self.depth_estimates[d]
+            if d in self.motion_sequences:
+                del self.motion_sequences[d]
 
         return scores_dict, velocities_dict
