@@ -247,7 +247,10 @@ def build_training_data_with_homography(
             embedding = sentence_embeddings[sentence]
             
             # Extract target track centroids
-            track_centroids = _extract_target_centroids(expr, labels)
+            label_map = expr["label"]
+            track_centroids = _extract_target_centroids(
+                refer_kitti_root, seq, label_map, frame_shape=frame_shape
+            )
             
             # Generate pairs WITH homography features
             motion, homography, language, label = _generate_bce_pairs_with_homography(

@@ -241,3 +241,37 @@ Train a `MotionLanguageAligner` to match 2D velocity vectors with natural langua
 1. Why does IoU matching only find ~20 GT matches? (YOLO boxes vs GT boxes misalignment?)
 2. Can ORB results be further improved with better hyperparameters or ensemble methods?
 3. Would fine-tuning RAFT on KITTI-specific flow help, or is the issue fundamental to dense flow averaging?
+
+### Exp 21: Learning Camera Motion Compensation ⚠️
+
+- **Change:** Instead of using geometric preprocessing (ORB homography + coordinate warping), train a neural network to learn camera motion compensation from data. The model receives IMAGE-FRAME motion vectors (8D: dx, dy, dw, dh, cx, cy, w, h) plus homography features (5D: tx, ty, sx, sy, theta) and learns to align with language descriptions.
+- **Architecture:**
+  - Motion encoder: 8D → 64 → 128 → 256
+  - Homography encoder: 5D → 32 → 64
+  - Fusion layer: concatenate → 320D → 256D
+  - Language encoder: 384D → 256D
+  - Cosine similarity + temperature scaling
+- **Training (sequences 0015, 0016, 0018):**
+  - 63,376 total samples (15,844 positive, 47,532 negative)
+  - Loss: 0.2839, Accuracy: 85.06% (50 epochs, ~71 seconds)
+  - Same negative sampling strategy as baseline (wrong sentence, zero velocity, inverted velocity, hard negative)
+- **Evaluation on seq 0011:**
+  - GT avg score: **0.3387** | Non-GT avg: **0.1636** | Separation: **+0.1751**
+  - 21,838 GT pairs, 21,838 Non-GT pairs
+- **Comparison with Geometric Baseline (Exp 17/20):**
+  - Baseline: GT 0.5446, Non-GT 0.2922, Separation +0.2524
+  - Learning: GT 0.3387, Non-GT 0.1636, Separation +0.1751
+  - **Performance drop:** -38% in GT score, -44% in Non-GT score, -31% in separation
+- **Analysis:** The learning approach underperforms the geometric baseline significantly. Possible reasons:
+  1. **Insufficient training data diversity:** Only 3 sequences (0015, 0016, 0018) may not cover enough camera motion patterns
+  2. **Camera motion complexity:** KITTI has diverse ego-motion (turns, forward motion, stops) that's hard to learn from limited data
+  3. **Homography decomposition limitations:** The 5D decomposition (tx, ty, sx, sy, theta) may not capture full 8-DOF homography complexity
+  4. **Geometric preprocessing advantage:** ORB+RANSAC directly solves camera motion geometrically, which is more reliable than learning from limited data
+- **Conclusion:** For GMC-Link's use case (plug-and-play motion-language alignment), **geometric preprocessing remains the superior approach**. Learning camera motion would require:
+  - Much larger training dataset with diverse camera motions
+  - More sophisticated homography representation (full 8-DOF or learned features)
+  - Potentially adversarial training to handle bad homographies
+  - The geometric approach is simpler, more interpretable, and performs better
+
+---
+
