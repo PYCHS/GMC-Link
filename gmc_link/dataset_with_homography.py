@@ -158,17 +158,17 @@ def _generate_bce_pairs_with_homography(
                     HOMOGRAPHY_CACHE[cache_key] = homography
                 
                 if homography is not None:
-                    # Decompose homography into interpretable features
+                    # Extract full 8D homography parameters
                     h_features = decompose_homography_features(homography)
-                    # Normalize translation by image size
-                    h_features[0] /= w  # tx
-                    h_features[1] /= h  # ty
+                    # Normalize translation components by image size for scale invariance
+                    h_features[2] /= w  # h13 (tx)
+                    h_features[5] /= h  # h23 (ty)
                 else:
                     # Identity homography (no camera motion)
-                    h_features = np.array([0.0, 0.0, 1.0, 1.0, 0.0], dtype=np.float32)
+                    h_features = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # Identity: I = [[1,0,0],[0,1,0],[0,0,1]]
             else:
                 # No homography available - use identity
-                h_features = np.array([0.0, 0.0, 1.0, 1.0, 0.0], dtype=np.float32)
+                h_features = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # Identity: I = [[1,0,0],[0,1,0],[0,0,1]]
             
             # === Positive pair ===
             motion_data.append(motion_vec)

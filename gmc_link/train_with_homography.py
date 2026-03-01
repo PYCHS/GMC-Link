@@ -205,9 +205,9 @@ def main() -> None:
 
     learning_rate = 1e-3
     batch_size = 128
-    epochs = 50
+    epochs = 100  # Increased for better convergence
     motion_dim = 8
-    homography_dim = 5
+    homography_dim = 8
     lang_dim = 384
     embed_dim = 256
 
@@ -216,7 +216,12 @@ def main() -> None:
     refer_kitti_root = "refer-kitti"
     
     # Train on sequences 0015, 0016, 0018 (test on 0011)
-    sequences = ["0015", "0016", "0018"]
+    # Train on all sequences except 0011 (test sequence)
+    sequences = [
+        "0001", "0002", "0003", "0004", "0005", 
+        "0006", "0007", "0008", "0009", "0010",
+        "0012", "0013", "0014", "0015", "0016", "0018", "0020"
+    ]
 
     # --- Pipeline ---
     dataloader = setup_data(

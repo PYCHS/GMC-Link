@@ -187,7 +187,7 @@ def main():
     print(f"\nLoading model from {weights_path}...")
     model = MotionLanguageAlignerWithHomography(
         motion_dim=8,
-        homography_dim=5,
+        homography_dim=8,
         lang_dim=384,
         embed_dim=256
     ).to(device)

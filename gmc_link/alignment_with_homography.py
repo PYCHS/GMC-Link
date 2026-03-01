@@ -1,41 +1,37 @@
 """
-Motion-Language Alignment with Learned Camera Motion Compensation
-
-Instead of preprocessing coordinates with homography, this module feeds:
-- Image-frame motion vectors (dx, dy, dw, dh, cx, cy, w, h)
-- Homography features (learned representation)
-- Language embedding
-
-The model learns how to compensate for camera ego-motion from data.
+GMC-Link Architecture with Homography Learning
+===============================================
+Network that learns camera motion compensation instead of using geometric preprocessing.
 """
 
-import torch
-from torch import nn
-import torch.nn.functional as F
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 def decompose_homography_features(H: np.ndarray) -> np.ndarray:
     """
-    Extract interpretable geometric features from homography matrix.
+    Extract full 8-parameter homography representation (8-DOF).
     
     Args:
         H: (3, 3) homography matrix
     
     Returns:
-        (5,) array: [tx_norm, ty_norm, scale_x, scale_y, rotation]
+        (8,) array: [h11, h12, h13, h21, h22, h23, h31, h32]
+        (h33 is implicitly 1 after normalization)
     """
-    # Translation (normalized by image size, applied externally)
-    tx, ty = H[0, 2], H[1, 2]
+    # Normalize by h33 to ensure h33 = 1
+    H_norm = H / (H[2, 2] + 1e-8)
     
-    # Scale factors
-    sx = np.sqrt(H[0, 0]**2 + H[0, 1]**2)
-    sy = np.sqrt(H[1, 0]**2 + H[1, 1]**2)
+    # Extract 8 parameters (excluding h33 which is 1)
+    features = np.array([
+        H_norm[0, 0], H_norm[0, 1], H_norm[0, 2],
+        H_norm[1, 0], H_norm[1, 1], H_norm[1, 2],
+        H_norm[2, 0], H_norm[2, 1]
+    ], dtype=np.float32)
     
-    # Rotation angle
-    theta = np.arctan2(H[1, 0], H[0, 0])
-    
-    return np.array([tx, ty, sx, sy, theta], dtype=np.float32)
+    return features
 
 
 class MotionLanguageAlignerWithHomography(nn.Module):
@@ -44,7 +40,7 @@ class MotionLanguageAlignerWithHomography(nn.Module):
     
     Architecture:
     - Motion encoder: projects 8D image-frame motion
-    - Homography encoder: projects 5D geometric camera features
+    - Homography encoder: projects 8D full homography features (8-DOF)
     - Fusion layer: combines motion + homography
     - Language encoder: projects text embedding
     - Similarity: cosine similarity in shared space
@@ -53,7 +49,7 @@ class MotionLanguageAlignerWithHomography(nn.Module):
     def __init__(
         self,
         motion_dim: int = 8,
-        homography_dim: int = 5,
+        homography_dim: int = 8,
         lang_dim: int = 384,
         embed_dim: int = 256
     ) -> None:
