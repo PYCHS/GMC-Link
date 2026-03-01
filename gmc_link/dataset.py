@@ -41,7 +41,7 @@ class MotionLanguageDataset(Dataset):
 
 
 def collate_fn(batch):
-    """Stack into (Batch, 2) motion, (Batch, L_dim) language, and (Batch,) labels."""
+    """Stack into (Batch, T, 8) motion sequences, (Batch, L_dim) language, and (Batch,) labels."""
     motion_batch = torch.stack([item[0] for item in batch], dim=0)
     language_batch = torch.stack([item[1] for item in batch], dim=0)
     label_batch = torch.stack([item[2] for item in batch], dim=0)
@@ -268,9 +268,11 @@ def _generate_bce_pairs(
     seq: str = None,
     frame_dir: str = None,
     orb_engine: Any = None,
+    seq_length: int = 8,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[float]]:
     """
     Generate positive and negative (motion, language) pairs for BCE training.
+    Produces 8-frame motion sequences: (seq_length, 8) where each frame is [V_x, V_y, Δw, Δh, c_x, c_y, w, h].
     Uses ORBHomographyEngine to warp centroids to absolute world velocities.
     """
     h, w = frame_shape
@@ -280,122 +282,107 @@ def _generate_bce_pairs(
 
     for tid, centroids in track_centroids.items():
         sorted_frames = sorted(centroids.keys())
-        for i in range(len(sorted_frames)):
-            curr_fid = sorted_frames[i]
-            target_fid = curr_fid + frame_gap
-
-            best_j = None
-            for j in range(i + 1, len(sorted_frames)):
-                if sorted_frames[j] >= target_fid:
-                    best_j = j
+        
+        for start_idx in range(len(sorted_frames)):
+            sequence = []
+            
+            for seq_step in range(seq_length):
+                i = start_idx + seq_step
+                if i >= len(sorted_frames):
+                    break
+                
+                curr_fid = sorted_frames[i]
+                target_fid = curr_fid + frame_gap
+                
+                best_j = None
+                for j in range(i + 1, len(sorted_frames)):
+                    if sorted_frames[j] >= target_fid:
+                        best_j = j
+                        break
+                
+                if best_j is None:
+                    break
+                
+                future_fid = sorted_frames[best_j]
+                if future_fid - curr_fid > frame_gap * 2:
                     break
 
-            if best_j is None:
-                continue
-
-            future_fid = sorted_frames[best_j]
-            if future_fid - curr_fid > frame_gap * 2:
-                continue
-
-            # --- ORB Homography compensated velocity with Jitter ---
-            if frame_dir is not None and orb_engine is not None and seq is not None:
-                cache_key = (seq, curr_fid, future_fid)
-                if cache_key in HOMOGRAPHY_CACHE:
-                    homography = HOMOGRAPHY_CACHE[cache_key]
-                else:
-                    curr_img_path = os.path.join(frame_dir, f"{curr_fid:06d}.png")
-                    future_img_path = os.path.join(frame_dir, f"{future_fid:06d}.png")
-
-                    img_curr = cv2.imread(curr_img_path)
-                    img_future = cv2.imread(future_img_path)
-
-                    if img_curr is not None and img_future is not None:
-                        homography = orb_engine.estimate_homography(
-                            img_curr, img_future, prev_bboxes=None
-                        )
+                cache_key = (seq, curr_fid, future_fid) if seq else None
+                homography = None
+                
+                if cache_key and frame_dir and orb_engine:
+                    if cache_key in HOMOGRAPHY_CACHE:
+                        homography = HOMOGRAPHY_CACHE[cache_key]
                     else:
-                        homography = None
-                    HOMOGRAPHY_CACHE[cache_key] = homography
-
+                        curr_img_path = os.path.join(frame_dir, f"{curr_fid:06d}.png")
+                        future_img_path = os.path.join(frame_dir, f"{future_fid:06d}.png")
+                        img_curr = cv2.imread(curr_img_path)
+                        img_future = cv2.imread(future_img_path)
+                        
+                        if img_curr is not None and img_future is not None:
+                            homography = orb_engine.estimate_homography(
+                                img_curr, img_future, prev_bboxes=None
+                            )
+                        HOMOGRAPHY_CACHE[cache_key] = homography
+                
+                cx1, cy1, bw1, bh1 = centroids[curr_fid]
+                cx2, cy2, bw2, bh2 = centroids[future_fid]
+                
                 if homography is not None:
-                    cx1, cy1, bw1, bh1 = centroids[curr_fid]
-                    cx2, cy2, bw2, bh2 = centroids[future_fid]
-
-                    # Synthetic Jitter (+/- 2 pixels) to harden against YOLO noise
                     j_cx2 = cx2 + np.random.uniform(-2.0, 2.0)
                     j_cy2 = cy2 + np.random.uniform(-2.0, 2.0)
                     j_bw2 = bw2 + np.random.uniform(-2.0, 2.0)
                     j_bh2 = bh2 + np.random.uniform(-2.0, 2.0)
-
+                    
                     pts = np.array([[cx1, cy1]], dtype=np.float32)
                     warped_pts = warp_points(pts, homography)
                     wcx1, wcy1 = warped_pts[0]
-
-                    # 8D Spatio-Temporal Features
+                    
                     dx = (j_cx2 - wcx1) / w * VELOCITY_SCALE
                     dy = (j_cy2 - wcy1) / h * VELOCITY_SCALE
                     dw = (j_bw2 - bw1) / w * VELOCITY_SCALE
                     dh = (j_bh2 - bh1) / h * VELOCITY_SCALE
-
-                    cx_n, cy_n = cx1 / w, cy1 / h
-                    bw_n, bh_n = bw1 / w, bh1 / h
-                    motion_vec = np.array(
-                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
-                    )
                 else:
-                    cx1, cy1, bw1, bh1 = centroids[curr_fid]
-                    cx2, cy2, bw2, bh2 = centroids[future_fid]
                     dx = (cx2 - cx1) / w * VELOCITY_SCALE
                     dy = (cy2 - cy1) / h * VELOCITY_SCALE
                     dw = (bw2 - bw1) / w * VELOCITY_SCALE
                     dh = (bh2 - bh1) / h * VELOCITY_SCALE
-
-                    cx_n, cy_n = cx1 / w, cy1 / h
-                    bw_n, bh_n = bw1 / w, bh1 / h
-                    motion_vec = np.array(
-                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
-                    )
-            else:
-                # Fallback: raw centroid differences
-                cx1, cy1, bw1, bh1 = centroids[curr_fid]
-                cx2, cy2, bw2, bh2 = centroids[future_fid]
-                dx = (cx2 - cx1) / w * VELOCITY_SCALE
-                dy = (cy2 - cy1) / h * VELOCITY_SCALE
-                dw = (bw2 - bw1) / w * VELOCITY_SCALE
-                dh = (bh2 - bh1) / h * VELOCITY_SCALE
-
+                
                 cx_n, cy_n = cx1 / w, cy1 / h
                 bw_n, bh_n = bw1 / w, bh1 / h
                 motion_vec = np.array(
                     [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
                 )
-
-            # 1 Positive Match
-            motion_data.append(motion_vec)
+                sequence.append(motion_vec)
+            
+            if len(sequence) < 3:
+                continue
+            
+            padded_seq = np.zeros((seq_length, 8), dtype=np.float32)
+            padded_seq[-len(sequence):, :] = np.array(sequence)
+            
+            motion_data.append(padded_seq)
             language_data.append(embedding.copy())
             labels.append(1.0)
-
-            # Hard Negative 1: Zero velocity + correct sentence
-            zero_mot = motion_vec.copy()
-            zero_mot[0:4] = 0.0
-            motion_data.append(zero_mot)
+            
+            zero_seq = padded_seq.copy()
+            zero_seq[:, 0:4] = 0.0
+            motion_data.append(zero_seq)
             language_data.append(embedding.copy())
             labels.append(0.0)
-
-            # Hard Negative 2: Inverted velocity + correct sentence
-            inv_mot = motion_vec.copy()
-            inv_mot[0:4] = -inv_mot[0:4]
-            motion_data.append(inv_mot)
+            
+            inv_seq = padded_seq.copy()
+            inv_seq[:, 0:4] = -inv_seq[:, 0:4]
+            motion_data.append(inv_seq)
             language_data.append(embedding.copy())
             labels.append(0.0)
-
-            # 2 Random Negatives: Same motion, wrong sentence
+            
             for _ in range(2):
                 wrong_sentence = random.choice(all_sentences)
                 while wrong_sentence == sentence and len(all_sentences) > 1:
                     wrong_sentence = random.choice(all_sentences)
-
-                motion_data.append(motion_vec.copy())
+                
+                motion_data.append(padded_seq.copy())
                 language_data.append(sentence_embeddings[wrong_sentence].copy())
                 labels.append(0.0)
 
