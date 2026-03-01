@@ -1,96 +1,129 @@
 """
-Take stabilized velocity vector from utils.py, and align it
-with language features from the language model using a small MLP.
+Align sequential motion features with language features.
 """
 
-import torch
-from torch import nn
-import torch.nn.functional as F
 import numpy as np
+import torch
+import torch.nn.functional as F
+from torch import nn
 
 
 class MotionLanguageAligner(nn.Module):
     """
-    Reasoning Head of GMC-Link that aligns motion features with language features.
+    Reasoning head that aligns motion sequences with language features.
     """
 
     def __init__(
-        self, motion_dim: int = 8, lang_dim: int = 768, embed_dim: int = 256
+        self,
+        motion_dim: int = 8,
+        lang_dim: int = 768,
+        embed_dim: int = 256,
+        seq_length: int = 8,
+        num_heads: int = 4,
+        num_layers: int = 2,
+        dropout: float = 0.1,
     ) -> None:
         super().__init__()
-        # Motion Encoder: Project (dx, dy, cx, cy, w, h) into a semantic vector.
-        # Deeper MLP to learn nuanced motion semantics (e.g., turning vs moving forward)
-        self.motion_projector = nn.Sequential(
-            nn.Linear(motion_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, embed_dim),
+        self.embed_dim = embed_dim
+        self.seq_length = seq_length
+
+        self.motion_input = nn.Linear(motion_dim, embed_dim)
+
+        self.positional_encoding = nn.Parameter(torch.zeros(1, seq_length, embed_dim))
+        nn.init.normal_(self.positional_encoding, std=0.02)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=embed_dim * 4,
+            dropout=dropout,
+            activation="relu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.temporal_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        self.temporal_attention = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            nn.Tanh(),
+            nn.Linear(embed_dim, 1),
+        )
+
+        self.motion_out = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
             nn.LayerNorm(embed_dim),
         )
 
         self.lang_projector = nn.Sequential(
-            nn.Linear(lang_dim, embed_dim), nn.ReLU(), nn.LayerNorm(embed_dim)
+            nn.Linear(lang_dim, embed_dim),
+            nn.ReLU(),
+            nn.LayerNorm(embed_dim),
         )
 
-        self.logit_scale = nn.Parameter(
-            torch.ones([]) * np.log(1 / 0.07)
-        )  # Learnable temperature parameter for scaling
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
-    def forward(
-        self, motion_feats: torch.Tensor, lang_feats: torch.Tensor
-    ) -> torch.Tensor:
+    def _encode_motion(self, motion_feats: torch.Tensor) -> torch.Tensor:
+        if motion_feats.dim() == 2:
+            motion_feats = motion_feats.unsqueeze(1)
+
+        t = motion_feats.shape[1]
+        if t > self.seq_length:
+            motion_feats = motion_feats[:, -self.seq_length :, :]
+            t = self.seq_length
+
+        key_padding_mask = (motion_feats.abs().sum(dim=-1) == 0)  # (N, T)
+
+        x = self.motion_input(motion_feats)
+        x = x + self.positional_encoding[:, :t, :]
+
+        x = self.temporal_encoder(x, src_key_padding_mask=key_padding_mask)
+
+        attn_logits = self.temporal_attention(x).squeeze(-1)  # (N, T)
+        attn_logits = attn_logits.masked_fill(key_padding_mask, -1e9)
+
+        attn_weights = torch.softmax(attn_logits, dim=-1)  # (N, T)
+        pooled = torch.sum(x * attn_weights.unsqueeze(-1), dim=1)  # (N, E)
+
+        motion_latents = self.motion_out(pooled)
+        return motion_latents
+
+    def _encode_lang(self, lang_feats: torch.Tensor) -> torch.Tensor:
+        return self.lang_projector(lang_feats)
+
+    def forward(self, motion_feats: torch.Tensor, lang_feats: torch.Tensor) -> torch.Tensor:
         """
-        The 'Thinking' phase: Link geometric motion to linguistic intent.
-
         Args:
-            motion_feats: (N, 8) Tensor of normalized world velocities [dx, dy],
-                          depth velocities [dw, dh], and positions [cx, cy, w, h].
-            lang_feats: (1, L_dim) Tensor of text features representing the prompt.
+            motion_feats: (N, T, 8) motion sequence tensor (T defaults to 8).
+            lang_feats: (1, L_dim) text features for the prompt.
 
         Returns:
-            alignment_logits: (N, 1) Matrix of similarity scores between each motion
-                              and the language concept.
+            alignment_logits: (N, 1) similarity scores.
         """
+        motion_latents = self._encode_motion(motion_feats)
+        language_latents = self._encode_lang(lang_feats)
 
-        # 1. Project to Shared Latent Space (latent -> 'thought space'), now having same dim (256)
-        motion_latents = self.motion_projector(motion_feats)
-        language_latents = self.lang_projector(lang_feats)
-
-        # 2. L2 Normalization
-        # Standardizes vectors to a length of 1.0 for Cosine Similarity, both (N, 256)  now.
         motion_latents = F.normalize(motion_latents, p=2, dim=-1)
         language_latents = F.normalize(language_latents, p=2, dim=-1)
 
-        # 3. Compute Similarity (The Alignment)
-        # (N, shared_dim) @ (shared_dim, M) -> (N, M)
         raw_similarity = torch.matmul(motion_latents, language_latents.t())
-
-        # 4. Temperature Scaling
-        # Sharpen the scores so the best match is mathematically distinct
         alignment_logits = raw_similarity * self.logit_scale.exp()
-
         return alignment_logits
 
-    def score_pairs(
-        self, motion_feats: torch.Tensor, lang_feats: torch.Tensor
-    ) -> torch.Tensor:
+    def score_pairs(self, motion_feats: torch.Tensor, lang_feats: torch.Tensor) -> torch.Tensor:
         """
-        Compute per-pair similarity scores for BCE training.
-
         Args:
-            motion_feats: (N, 8) Tensor of velocity, depth scaling, and position vectors.
-            lang_feats: (N, L_dim) Tensor of language embeddings (one per motion).
+            motion_feats: (N, T, 8) motion sequence tensor.
+            lang_feats: (N, L_dim) per-pair language embeddings.
 
         Returns:
-            scores: (N,) Tensor of scalar similarity scores per pair.
+            scores: (N,) similarity scores.
         """
-        motion_latents = F.normalize(self.motion_projector(motion_feats), p=2, dim=-1)
-        language_latents = F.normalize(self.lang_projector(lang_feats), p=2, dim=-1)
+        motion_latents = self._encode_motion(motion_feats)
+        language_latents = self._encode_lang(lang_feats)
 
-        # Element-wise dot product → per-pair cosine similarity
+        motion_latents = F.normalize(motion_latents, p=2, dim=-1)
+        language_latents = F.normalize(language_latents, p=2, dim=-1)
+
         scores = (motion_latents * language_latents).sum(dim=-1)
         scores = scores * self.logit_scale.exp()
         return scores
