@@ -14,6 +14,7 @@ from .utils import (
 )
 from .alignment import MotionLanguageAligner
 from .core import ORBHomographyEngine
+from .calibration import CameraCalibration, estimate_depth_from_bbox
 
 
 class GMCLinkManager:
@@ -30,9 +31,12 @@ class GMCLinkManager:
         device: str = "cpu",
         lang_dim: int = 384,
         frame_gap: int = 5,
+        calib_path: Optional[str] = None,
+        use_metric_velocity: bool = True,
     ) -> None:
         self.device = device
         self.frame_gap = frame_gap
+        self.use_metric_velocity = use_metric_velocity
 
         self.motion_buffer = MotionBuffer(alpha=0.3)
         self.score_buffer = ScoreBuffer(alpha=0.4)
@@ -47,10 +51,16 @@ class GMCLinkManager:
         self.ego_engine = ORBHomographyEngine(max_features=1500)
         self.prev_frame = None
         self.prev_detections = None
+        
+        # Initialize camera calibration for metric 3D projection
+        self.calibration = CameraCalibration(calib_path)
 
         # Store centroid & dimension history for velocity computation over a window
         self.centroid_history: Dict[int, List[np.ndarray]] = {}
         self.wh_history: Dict[int, List[np.ndarray]] = {}
+        
+        # Store depth estimates for each track (meters)
+        self.depth_estimates: Dict[int, float] = {}
 
     def process_frame(
         self,
@@ -126,18 +136,42 @@ class GMCLinkManager:
             wh_history = self.wh_history[tid]
 
             if len(history) > 1:
+                # Estimate depth from bounding box height
+                if tid not in self.depth_estimates:
+                    self.depth_estimates[tid] = estimate_depth_from_bbox(
+                        bbox_height=curr_h,
+                        image_height=float(img_h)
+                    )
+                depth_z = self.depth_estimates[tid]
+                
                 # Centroid-difference velocity over window (not divided by gap to match training)
                 raw_velocity = history[-1] - history[0]
-                norm_velocity = normalize_velocity(raw_velocity, frame_shape)
+                
+                if self.use_metric_velocity:
+                    # Metric velocity: converts pixel motion to world frame (m/s)
+                    # This resolves parallax: stationary objects have ~0 m/s regardless of depth
+                    dx_metric, dy_metric = self.calibration.pixel_to_metric_velocity(
+                        dx_pixel=raw_velocity[0],
+                        dy_pixel=raw_velocity[1],
+                        depth=depth_z,
+                        time_delta=float(self.frame_gap) / 30.0  # Assuming 30 FPS
+                    )
+                    # Scale to match training range (empirical)
+                    dx = dx_metric * 10.0  # Convert m/s to comparable scale
+                    dy = dy_metric * 10.0
+                else:
+                    # Fallback to normalized pixel velocity (old approach)
+                    norm_velocity = normalize_velocity(raw_velocity, frame_shape)
+                    dx, dy = norm_velocity[0], norm_velocity[1]
 
-                # Z-axis depth scaling velocity (dw, dh)
+                # Z-axis depth scaling velocity (dw, dh) - radial cues
                 raw_dw_dh = wh_history[-1] - wh_history[0]
                 dw_raw = raw_dw_dh[0] / float(img_w) * VELOCITY_SCALE
                 dh_raw = raw_dw_dh[1] / float(img_h) * VELOCITY_SCALE
 
                 # Smooth the FULL 4D kinematic vector to absorb YOLO jitter
                 full_raw_v = np.array(
-                    [norm_velocity[0], norm_velocity[1], dw_raw, dh_raw],
+                    [dx, dy, dw_raw, dh_raw],
                     dtype=np.float32,
                 )
                 smoothed_v = self.motion_buffer.smooth(tid, full_raw_v)
@@ -193,5 +227,9 @@ class GMCLinkManager:
         dead_centroids = set(self.centroid_history.keys()) - active_ids
         for d in dead_centroids:
             del self.centroid_history[d]
+            if d in self.wh_history:
+                del self.wh_history[d]
+            if d in self.depth_estimates:
+                del self.depth_estimates[d]
 
         return scores_dict, velocities_dict
