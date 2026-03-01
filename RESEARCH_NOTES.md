@@ -321,3 +321,101 @@ Train a `MotionLanguageAligner` to match 2D velocity vectors with natural langua
 
 ---
 
+
+### Critical Analysis: Frame Mismatch Issue in Learning Approach ⚠️
+
+**Fundamental Problem Identified:**
+
+The learning approach (Exp 21-22) has an **inherent frame mismatch** that limits performance:
+
+```
+Geometric Baseline (Exp 17/20):
+  Image-frame coords → WARP by homography → World-frame coords → Motion
+  ✓ Motion vectors represent TRUE world motion
+  ✓ Language describes world motion ("car moving right")
+  ✓ Perfect alignment → High confidence (GT: 0.54)
+
+Learning Approach (Exp 21-22):
+  Image-frame coords → Motion directly (no warping)
+  ✗ Motion vectors include camera ego-motion!
+  ✓ Language still describes world motion
+  ✗ FRAME MISMATCH → Inherent label noise
+```
+
+**Concrete Example:**
+- Car is stationary in world-frame
+- Camera pans right
+- Image-frame: car appears to move LEFT (-dx)
+- Sentence: "the parked car" (stationary)
+- **Training pair**: (motion=[-dx, 0, ...], "parked car", label=1.0)
+- **This is INCORRECT!** The motion doesn't match the language
+
+**Why This Explains Results:**
+
+1. **Lower GT Scores (0.39 vs 0.54):**
+   - Many "positive" training pairs have mismatched motion/language
+   - Model learns lower confidence due to noisy labels
+   - Cannot achieve high scores even on true matches
+
+2. **Better Separation (+48%):**
+   - Model CAN learn to reject obviously wrong sentences
+   - Wrong sentence + any motion → clearly negative
+   - This signal is less affected by frame mismatch
+   - Explains strong Non-GT rejection (0.13)
+
+3. **Why More Data Helped:**
+   - More examples of "clearly wrong" pairs
+   - Better discrimination despite label noise
+   - But cannot fix fundamental frame mismatch
+
+**The "Breakthrough" Reconsidered:**
+
+The claim that separation (0.2605) exceeds geometric baseline (0.2524) needs caveat:
+- **Learning evaluation**: Noisy GT (0.39) vs Noisy Non-GT (0.13) → Sep 0.26
+- **Geometric evaluation**: Clean GT (0.54) vs Clean Non-GT (0.29) → Sep 0.25
+- **Different noise levels** make direct comparison misleading
+- The learning model's separation might be artificially inflated by compressed score range
+
+**True Limitation:**
+
+The learning approach **cannot surpass geometric baseline** without solving the frame mismatch:
+
+**Option 1: Pre-warp training data** (defeats the purpose)
+```python
+# This would work but makes learning redundant:
+coords_warped = cv2.perspectiveTransform(coords, H)
+motion = compute_motion(coords_warped)  # World-frame motion
+# Now motion matches language, but we're back to geometric preprocessing!
+```
+
+**Option 2: Perfect learned compensation** (requires perfect labels)
+- Model must learn to invert camera motion from homography
+- But training labels themselves have frame mismatch
+- Chicken-and-egg problem
+
+**Conclusion:**
+
+The research successfully demonstrated:
+- ✅ 8D homography > 5D for geometric encoding
+- ✅ Data diversity (17 seqs) improves discrimination
+- ✅ Model can learn robust rejection of wrong sentences
+
+But also revealed a **fundamental limitation**:
+- ⚠️ Learning from image-frame motion + world-frame language → inherent label noise
+- ⚠️ Cannot match geometric baseline's clean separation without solving frame mismatch
+- ⚠️ The approach is theoretically limited by label quality, not model capacity
+
+**Recommendation:**
+
+For GMC-Link's use case, **geometric preprocessing remains the correct choice**:
+1. Clean, interpretable, no label noise
+2. Provably correct world-frame motion
+3. Higher confidence scores (0.54 vs 0.39)
+4. Simpler and more reliable
+
+The learning approach would only be viable if:
+- Training data included ground-truth world-frame motion vectors, OR
+- A two-stage approach: first learn perfect camera compensation, then alignment
+
+---
+
