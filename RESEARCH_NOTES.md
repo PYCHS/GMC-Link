@@ -191,6 +191,48 @@ Train a `MotionLanguageAligner` to match 2D velocity vectors with natural langua
 - **Analysis:** Injecting the `min()` spatial probability constraint directly into TempRMOT caused a -6.75% HOTA regression under standard strictness! TempRMOT features deep *native* 8-frame temporal multi-head attention trackers, yielding hyper-confident bounding logic. Subjecting it to GMC-Link's independent geometry vectors artificially drops confidence below TempRMOT's absolute deletion floor (`0.4`), accidentally evaporating perfectly valid tracked entities. When the threshold floor was ablated down to `0.2` on sequence 0011, HOTA cleanly recovered from 29.4% back to parity with the baseline (~39.8%).
 - **Conclusion:** GMC-Link is mathematically sound and an exceptionally powerful plug-and-play geometry filter for *spatially-ignorant* frameworks (like TransRMOT), but is functionally redundant and actively destructive when force-coupled with models that natively wield mature temporal tracking engines.
 
+### Exp 20: Metric 3D Projection System — Complete Architecture Redesign 🚧
+
+- **Motivation:** Previous experiments relied on 2D pixel heuristics with spatial context. While 8D vectors `[dx, dy, dw, dh, cx, cy, w, h]` provided implicit depth reasoning, they cannot fundamentally resolve 3D parallax or recognize temporal behaviors like braking, acceleration, and lane merging.
+- **Change:** Implemented comprehensive 4-phase metric projection pipeline:
+  - **Phase 1: Metric Foundation**
+    - Created `calibration.py` to parse KITTI P2 projection matrix (f_x=718.856, f_y=718.856)
+    - Implemented metric velocity transformation: `V_world_x = (Δx_pixel · Z) / (f_x · Δt)`
+    - Added depth estimation interface: `Z = (f_y · H_real) / h_pixel` with bbox-based heuristics
+    - Integrated into `manager.py` with per-track depth maintenance
+  - **Phase 2: Sequential Feature Engineering**
+    - Modified manager to maintain 8-frame motion history per track
+    - Each frame stores 8D metric vector: `[V_x(m/s), V_y(m/s), Δw, Δh, c_x, c_y, w, h]`
+    - Output tensor shape: (Batch, 8, 8) instead of (Batch, 8)
+    - Zero-padding for tracks with <8 frames, aligned to end
+  - **Phase 3: Temporal Transformer Architecture**
+    - Replaced MLP `motion_projector` with `nn.TransformerEncoder`
+    - Added learnable positional encoding for 8-frame sequences
+    - Implemented attention-based temporal pooling to weight critical frames (e.g., braking deceleration)
+    - Architecture: Linear(8→256) → +PosEmbed → Transformer(2 layers, 4 heads) → Attention pooling → LayerNorm
+    - Handles variable-length sequences with key padding masks
+  - **Phase 4: Sequential Training Pipeline**
+    - Modified `dataset.py` to generate 8-frame motion sequences per track
+    - Minimum sequence length: 3 frames to ensure temporal context
+    - Hard negatives adapted: zero-velocity sequences, inverted-velocity sequences
+    - Training format: (Batch, 8, 8) with full backward compatibility
+- **Implementation Status:**
+  - ✅ Phase 1-4 complete and committed to `feature/metric-3d-projection` branch
+  - ✅ All integration tests passed (Transformer forward pass, dataset generation, DataLoader)
+  - ⏳ Training not yet executed — requires compute time on Refer-KITTI
+  - ⏳ Evaluation metrics pending post-training
+- **Expected Benefits:**
+  - Resolves 3D parallax: stationary objects at different depths → ~0 m/s instead of varying pixel velocities
+  - Temporal reasoning: Model can learn acceleration patterns ("braking car"), not just instantaneous motion
+  - Physical interpretability: Velocities in m/s align with real-world motion semantics
+  - Robust to camera motion: Metric velocities are ego-motion invariant by construction
+- **Technical Details:**
+  - Depth estimation uses simple heuristic: `Z = (f_y · 1.5m) / h_pixel`, clamped to [2m, 100m]
+  - Velocity scaling: 10x multiplier applied to match training range expectations
+  - Frame rate: 30 FPS used for Δt calculation
+  - Sequence generation: Sliding window over track history with frame_gap=5
+  - Transformer config: d_model=256, nhead=4, num_layers=2, dropout=0.1
+
 ---
 
 ## Key Bugs Fixed Along the Way
