@@ -114,30 +114,7 @@ def _generate_bce_pairs_with_homography(
             if future_fid - curr_fid > frame_gap * 2:
                 continue
             
-            # Extract IMAGE-FRAME motion (no warping!)
-            cx1, cy1, bw1, bh1 = centroids[curr_fid]
-            cx2, cy2, bw2, bh2 = centroids[future_fid]
-            
-            # Add synthetic jitter for robustness
-            j_cx2 = cx2 + np.random.uniform(-2.0, 2.0)
-            j_cy2 = cy2 + np.random.uniform(-2.0, 2.0)
-            j_bw2 = bw2 + np.random.uniform(-2.0, 2.0)
-            j_bh2 = bh2 + np.random.uniform(-2.0, 2.0)
-            
-            # IMAGE-FRAME velocity (raw pixel displacement)
-            dx = (j_cx2 - cx1) / w * VELOCITY_SCALE
-            dy = (j_cy2 - cy1) / h * VELOCITY_SCALE
-            dw = (j_bw2 - bw1) / w * VELOCITY_SCALE
-            dh = (j_bh2 - bh1) / h * VELOCITY_SCALE
-            
-            cx_n, cy_n = cx1 / w, cy1 / h
-            bw_n, bh_n = bw1 / w, bh1 / h
-            
-            motion_vec = np.array(
-                [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
-            )
-            
-            # Extract homography features
+            # NEW: Compute homography FIRST, then warp coordinates to world-frame
             if frame_dir is not None and orb_engine is not None and seq is not None:
                 cache_key = (seq, curr_fid, future_fid)
                 if cache_key in HOMOGRAPHY_CACHE:
@@ -145,7 +122,6 @@ def _generate_bce_pairs_with_homography(
                 else:
                     curr_img_path = os.path.join(frame_dir, f"{curr_fid:06d}.png")
                     future_img_path = os.path.join(frame_dir, f"{future_fid:06d}.png")
-                    
                     img_curr = cv2.imread(curr_img_path)
                     img_future = cv2.imread(future_img_path)
                     
@@ -156,17 +132,57 @@ def _generate_bce_pairs_with_homography(
                     else:
                         homography = None
                     HOMOGRAPHY_CACHE[cache_key] = homography
-                
-                if homography is not None:
-                    # Extract full 8D homography parameters
-                    h_features = decompose_homography_features(homography)
-                    # Normalize translation components by image size for scale invariance
-                    h_features[2] /= w  # h13 (tx)
-                    h_features[5] /= h  # h23 (ty)
-                else:
-                    # Identity homography (no camera motion)
-                    h_features = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # Identity: I = [[1,0,0],[0,1,0],[0,0,1]]
             else:
+                homography = None
+            
+            # Extract centroids in image-frame
+            cx1, cy1, bw1, bh1 = centroids[curr_fid]
+            cx2, cy2, bw2, bh2 = centroids[future_fid]
+            
+            # WARP coordinates to world-frame (camera-compensated)
+            if homography is not None:
+                cx1_world, cy1_world = warp_point(cx1, cy1, homography)
+                cx2_world, cy2_world = warp_point(cx2, cy2, homography)
+                bw1_world, bh1_world = bw1, bh1  # Size doesn't change much
+                bw2_world, bh2_world = bw2, bh2
+            else:
+                # No homography - use image-frame as fallback
+                cx1_world, cy1_world = cx1, cy1
+                cx2_world, cy2_world = cx2, cy2
+                bw1_world, bh1_world = bw1, bh1
+                bw2_world, bh2_world = bw2, bh2
+            
+            # Add synthetic jitter for robustness (in world-frame)
+            j_cx2 = cx2_world + np.random.uniform(-2.0, 2.0)
+            j_cy2 = cy2_world + np.random.uniform(-2.0, 2.0)
+            j_bw2 = bw2_world + np.random.uniform(-2.0, 2.0)
+            j_bh2 = bh2_world + np.random.uniform(-2.0, 2.0)
+            
+            # WORLD-FRAME velocity (TRUE object motion, camera-compensated!)
+            dx = (j_cx2 - cx1_world) / w * VELOCITY_SCALE
+            dy = (j_cy2 - cy1_world) / h * VELOCITY_SCALE
+            dw = (j_bw2 - bw1_world) / w * VELOCITY_SCALE
+            dh = (j_bh2 - bh1_world) / h * VELOCITY_SCALE
+            
+            cx_n, cy_n = cx1_world / w, cy1_world / h
+            bw_n, bh_n = bw1_world / w, bh1_world / h
+            
+            motion_vec = np.array(
+                [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
+            )
+            
+            
+            # Extract homography features (homography already computed above)
+            # Extract homography features (homography already computed above)
+            if homography is not None:
+                # Extract full 8D homography parameters
+                h_features = decompose_homography_features(homography)
+                # Normalize translation components by image size for scale invariance
+                h_features[2] /= w  # h13 (tx)
+                h_features[5] /= h  # h23 (ty)
+            else:
+                # Identity homography (no camera motion)
+                h_features = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # Identity: I = [[1,0,0],[0,1,0],[0,0,1]]
                 # No homography available - use identity
                 h_features = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # Identity: I = [[1,0,0],[0,1,0],[0,0,1]]
             
@@ -281,3 +297,26 @@ def build_training_data_with_homography(
         np.array(all_language, dtype=np.float32),
         np.array(all_labels, dtype=np.float32),
     )
+
+
+def warp_point(x: float, y: float, H: np.ndarray) -> tuple:
+    """
+    Warp a single point using homography matrix.
+    
+    Args:
+        x, y: Point coordinates in pixels
+        H: (3, 3) homography matrix
+    
+    Returns:
+        (x_warped, y_warped): Warped coordinates
+    """
+    if H is None:
+        return x, y
+    
+    # Create homogeneous coordinates
+    point = np.array([[x, y]], dtype=np.float32).reshape(1, 1, 2)
+    
+    # Warp using cv2
+    point_warped = cv2.perspectiveTransform(point, H)
+    
+    return float(point_warped[0, 0, 0]), float(point_warped[0, 0, 1])
