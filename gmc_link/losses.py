@@ -1,28 +1,30 @@
 """
 Loss functions for the GMC-Link alignment network.
 """
-from torch import nn
+from infonce import SupervisedInfoNCE
 
-class AlignmentLoss(nn.Module):
+class AlignmentLoss(SupervisedInfoNCE):
     """
-    Binary cross-entropy loss for motion-language alignment.
+    InfoNCE loss for motion-language alignment.
 
-    For each (motion, language) pair, the model predicts a scalar similarity
-    score. Positive pairs (correct match) should score high, negative pairs
-    (wrong sentence) should score low.
+    This loss encourages the model to assign high similarity scores to correct motion-language pairs and low scores to incorrect pairs. It is a binary classification loss where:
 
-    This replaces the CLIP-style contrastive loss which breaks down when
-    many samples share the same sentence.
+    - Positive pairs (correct matches) should have scores close to 1.0.
+    - Negative pairs (incorrect matches) should have scores close to 0.0.   
+
     """
 
     def __init__(self):
-        super().__init__()
-        self.loss_fn = nn.BCEWithLogitsLoss()
+        super().__init__(temperature=0.07)
 
-    def forward(self, scores, labels):
+    def forward(self, features, target):
         """
         Args:
-            scores: (N,) similarity scores from the aligner
-            labels: (N,) binary labels (1.0 = positive match, 0.0 = negative)
+            features: (N, D) normalized embedding vectors for all
+                      motion and text samples in the batch.
+            target:   (N,) integer labels — matching pairs share the
+                      same label.
+        Returns:
+            Scalar supervised InfoNCE loss.
         """
-        return self.loss_fn(scores, labels)
+        return super().forward(features, target)
