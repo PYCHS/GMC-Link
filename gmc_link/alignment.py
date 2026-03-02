@@ -46,32 +46,21 @@ class MotionLanguageAligner(nn.Module):
     ) -> torch.Tensor:
         """
         The 'Thinking' phase: Link geometric motion to linguistic intent.
+        Used at inference time to produce scaled similarity logits.
 
         Args:
-            motion_feats: (N, 8) Tensor of normalized world velocities [dx, dy],
-                          depth velocities [dw, dh], and positions [cx, cy, w, h].
-            lang_feats: (1, L_dim) Tensor of text features representing the prompt.
+            motion_feats: (N, 8) Tensor of normalized world velocities [dx, dy], depth velocities [dw, dh], and positions [cx, cy, w, h].
+            lang_feats: (M, L_dim) Tensor of text features representing the prompt.
 
         Returns:
-            alignment_logits: (N, 1) Matrix of similarity scores between each motion
-                              and the language concept.
+            alignment_logits: (N, M) Matrix of similarity scores between each motion and the language concept.
         """
+        motion_emb, lang_emb = self.encode(motion_feats, lang_feats)
 
-        # 1. Project to Shared Latent Space (latent -> 'thought space'), now having same dim (256)
-        motion_latents = self.motion_projector(motion_feats)
-        language_latents = self.lang_projector(lang_feats)
+        # (N, embed_dim) @ (embed_dim, M) -> (N, M)
+        raw_similarity = torch.matmul(motion_emb, lang_emb.t())
 
-        # 2. L2 Normalization
-        # Standardizes vectors to a length of 1.0 for Cosine Similarity, both (N, 256)  now.
-        motion_latents = F.normalize(motion_latents, p=2, dim=-1)
-        language_latents = F.normalize(language_latents, p=2, dim=-1)
-
-        # 3. Compute Similarity (The Alignment)
-        # (N, shared_dim) @ (shared_dim, M) -> (N, M)
-        raw_similarity = torch.matmul(motion_latents, language_latents.t())
-
-        # 4. Temperature Scaling
-        # Sharpen the scores so the best match is mathematically distinct
+        # Temperature Scaling: sharpen scores so the best match is distinct
         alignment_logits = raw_similarity * self.logit_scale.exp()
 
         return alignment_logits
@@ -81,18 +70,19 @@ class MotionLanguageAligner(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Project motion and language inputs into the shared latent space.
+        This is the core method used by both training (InfoNCE) and inference.
 
         Args:
-            motion_feats: (N, 8) motion vectors.
-            lang_feats:   (N, L_dim) language embeddings.
+            motion_feats: (N, motion_dim) motion vectors.
+            lang_feats:   (N, lang_dim) or (M, lang_dim) language embeddings.
 
         Returns:
-            motion_latents:   (N, embed_dim) L2-normalized motion embeddings.
-            language_latents: (N, embed_dim) L2-normalized language embeddings.
+            motion_emb:   (N, embed_dim) L2-normalized motion embeddings.
+            lang_emb:     (N, embed_dim) or (M, embed_dim) L2-normalized language embeddings.
         """
-        motion_latents = F.normalize(self.motion_projector(motion_feats), p=2, dim=-1)
-        language_latents = F.normalize(self.lang_projector(lang_feats), p=2, dim=-1)
-        return motion_latents, language_latents
+        motion_emb = F.normalize(self.motion_projector(motion_feats), p=2, dim=-1)
+        lang_emb = F.normalize(self.lang_projector(lang_feats), p=2, dim=-1)
+        return motion_emb, lang_emb
 
     def score_pairs(
         self, motion_feats: torch.Tensor, lang_feats: torch.Tensor
