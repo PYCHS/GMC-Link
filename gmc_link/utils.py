@@ -118,23 +118,3 @@ class ScoreBuffer:
         dead = set(self.registry.keys()) - set(active_track_ids)
         for d in dead:
             del self.registry[d]
-
-
-def velocity_confidence(
-    velocity: np.ndarray, threshold: float = 0.3, steepness: float = 10.0
-) -> float:
-    """
-    Compute a [0, 1] confidence that the object is actually moving,
-    based on velocity magnitude. Uses a sigmoid gate centered at `threshold`.
-
-    Objects with near-zero compensated velocity (i.e. stationary after camera
-    compensation) get confidence → 0, suppressing their alignment score.
-
-    Args:
-        velocity: (2,) normalized velocity vector [dx, dy].
-        threshold: Velocity magnitude below which confidence drops sharply.
-        steepness: Controls how sharp the sigmoid transition is.
-    """
-    speed = float(np.linalg.norm(velocity))
-    # Sigmoid: 1 / (1 + exp(-steepness * (speed - threshold)))
-    return 1.0 / (1.0 + np.exp(-steepness * (speed - threshold)))
