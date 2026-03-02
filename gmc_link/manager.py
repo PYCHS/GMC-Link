@@ -217,15 +217,18 @@ class GMCLinkManager:
         if not compensated_velocities:
             return {}, {}
 
-        # Align motion with language
+        # Align motion with language via cosine similarity
         motion_tensor = torch.tensor(
             np.array(compensated_velocities), dtype=torch.float32
         ).to(self.device)
 
         with torch.no_grad():
-            logits = self.aligner(motion_tensor, language_embedding.to(self.device))
-
-        raw_scores = torch.sigmoid(logits).cpu().numpy().flatten()
+            motion_emb, lang_emb = self.aligner.encode(
+                motion_tensor, language_embedding.to(self.device)
+            )
+            # Cosine similarity in [-1, 1], remapped to [0, 1]
+            cosine_sim = torch.matmul(motion_emb, lang_emb.t()).flatten()
+            raw_scores = ((cosine_sim + 1.0) / 2.0).cpu().numpy()
 
         # Apply score smoothing for temporal consistency
         scores_dict = {}
