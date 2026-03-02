@@ -9,10 +9,9 @@ class AlignmentLoss(nn.Module):
 
     For each (motion, language) pair, the model predicts a scalar similarity
     score. Positive pairs (correct match) should score high, negative pairs
-    (wrong sentence) should score low.
-
-    This replaces the CLIP-style contrastive loss which breaks down when
-    many samples share the same sentence.
+    (wrong sentence) should score low. This pointwise formulation handles
+    the many-to-one relationship where multiple tracklets can match the
+    same referring expression.
     """
 
     def __init__(self):

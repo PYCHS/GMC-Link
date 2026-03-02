@@ -178,7 +178,7 @@ Train a `MotionLanguageAligner` to match 2D velocity vectors with natural langua
 
 **Conclusion:** Injecting spatial depth context (`cx, cy, w, h`) and explicitly passing the target scaling velocities (`dw, dh`) mathematically completes the ego-motion pipeline. A flat 2D homography cannot correctly isolate arbitrary 3D static depths, but feeding projective geometry directly into the alignment MLP intrinsically allows it to regress structural translation phenomena. This definitively resolves the false-positive parallax gap on moving cameras. Furthermore, deliberately adding synthetic uniform noise (`±2px`) to the dataset positional pairs combined with 4D feature EMA smoothing fundamentally hardens the inference engine against real-world tracking jitter, recovering previously missed target intents.
 
-### Exp 19: TempRMOT Integration & Threshold Ablation ✅
+### Exp 19: TempRMOT Integration & Threshold Ablation 
 
 - **Change:** Evaluated `GMCLinkManager` as a plug-and-play semantic filter inside `TempRMOT`, replacing existing threshold `(0.4)` bounding validations with the new geometric probability constraint `min(vision_prob, gmc_score)`. Executed TrackEval across the full 136-sequence refer-kitti dynamic motion set.
 - **Evaluation Benchmark (Dataset-Wide Motion Subsets):**
@@ -191,7 +191,7 @@ Train a `MotionLanguageAligner` to match 2D velocity vectors with natural langua
 - **Analysis:** Injecting the `min()` spatial probability constraint directly into TempRMOT caused a -6.75% HOTA regression under standard strictness! TempRMOT features deep *native* 8-frame temporal multi-head attention trackers, yielding hyper-confident bounding logic. Subjecting it to GMC-Link's independent geometry vectors artificially drops confidence below TempRMOT's absolute deletion floor (`0.4`), accidentally evaporating perfectly valid tracked entities. When the threshold floor was ablated down to `0.2` on sequence 0011, HOTA cleanly recovered from 29.4% back to parity with the baseline (~39.8%).
 - **Conclusion:** GMC-Link is mathematically sound and an exceptionally powerful plug-and-play geometry filter for *spatially-ignorant* frameworks (like TransRMOT), but is functionally redundant and actively destructive when force-coupled with models that natively wield mature temporal tracking engines.
 
-### Exp 20: Metric 3D Projection System — Complete Architecture Redesign 🚧
+### Exp 20: Metric 3D Projection System — Complete Architecture Redesign 
 
 - **Motivation:** Previous experiments relied on 2D pixel heuristics with spatial context. While 8D vectors `[dx, dy, dw, dh, cx, cy, w, h]` provided implicit depth reasoning, they cannot fundamentally resolve 3D parallax or recognize temporal behaviors like braking, acceleration, and lane merging.
 - **Change:** Implemented comprehensive 4-phase metric projection pipeline:
