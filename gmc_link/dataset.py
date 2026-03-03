@@ -125,7 +125,7 @@ def _collect_expressions(
     data_root: str, sequences: List[str], text_encoder: Any
 ) -> Tuple[List[Dict[str, Any]], Dict[str, np.ndarray], List[str]]:
     """
-    Load JSON expressions, filter for motion keywords, and compute language embeddings.
+    Load JSON expressions and compute language embeddings for ALL sentences.
     """
     print("  Encoding all sentences...")
     all_expressions = []
@@ -138,12 +138,8 @@ def _collect_expressions(
             continue
 
         exprs = load_refer_kitti_expressions(expression_dir)
-        skipped = 0
         for expr in exprs:
             sentence = expr["sentence"]
-            if not is_motion_expression(sentence):
-                skipped += 1
-                continue
 
             if sentence not in sentence_embeddings:
                 emb = text_encoder.encode(sentence).squeeze(0).cpu().numpy()
@@ -158,10 +154,7 @@ def _collect_expressions(
                 }
             )
 
-        if skipped:
-            print(f"  {seq}: skipped {skipped} non-motion expressions")
-
-    print(f"  Motion-related sentences: {len(sentence_embeddings)}")
+    print(f"  Unique sentences: {len(sentence_embeddings)}")
     print(f"  Total expressions: {len(all_expressions)}")
     all_sentences = list(sentence_embeddings.keys())
 

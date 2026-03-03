@@ -33,13 +33,12 @@ def train_one_epoch(
     device: torch.device,
 ) -> Tuple[float, float]:
     """
-    Train the model for a single epoch using Supervised InfoNCE.
+    Train the model for a single epoch using CLIP-style cross-modal InfoNCE.
 
-    For each batch of N (motion, language) pairs:
-      - Project both to the shared latent space via model.encode()
-      - Stack into a (2N, D) feature matrix
-      - Build integer labels so that positive pairs share the same ID
-      - Let SupervisedInfoNCE form its own similarity matrix & contrastive loss
+    For each batch of N (motion, language, expr_id) triples:
+      - Project both modalities to the shared latent space via model.encode()
+      - Pass motion_emb, lang_emb, and labels to the loss function
+      - The loss computes only cross-modal (motion↔language) similarities
 
     Returns:
         Tuple of (average_loss, accuracy).
@@ -58,13 +57,8 @@ def train_one_epoch(
         # ── Project to shared embedding space ──
         motion_emb, lang_emb = model.encode(motion_features, language_features)
 
-        # ── Build contrastive features & integer targets ──
-        # Stack motion and language embeddings: (2N, D)
-        # Duplicate expression IDs so motion_i and lang_i share the same class
-        features = torch.cat([motion_emb, lang_emb], dim=0)  # (2N, D)
-        target = torch.cat([expr_ids, expr_ids], dim=0)       # (2N,)
-
-        loss = loss_func(features, target)
+        # ── CLIP-style cross-modal contrastive loss ──
+        loss = loss_func(motion_emb, lang_emb, expr_ids)
 
         optimizer.zero_grad()
         loss.backward()
@@ -188,9 +182,9 @@ def main() -> None:
     )
     print(f"Device: {device}")
 
-    learning_rate = 1e-3
+    learning_rate = 5e-4
     batch_size = 128
-    epochs = 50
+    epochs = 200
     lang_dim = 384
 
     # Refer-KITTI data paths (Train on all available seqs, test on 11)

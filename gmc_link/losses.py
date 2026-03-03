@@ -1,32 +1,54 @@
 """
 Loss functions for the GMC-Link alignment network.
+
+Uses CLIP-style symmetric cross-modal contrastive loss:
+only motion↔language similarities are computed — no intra-modal
+(motion↔motion or language↔language) comparisons.
 """
-from infonce import SupervisedInfoNCE
+import torch
+from torch import nn
 
-class AlignmentLoss(SupervisedInfoNCE):
+
+class AlignmentLoss(nn.Module):
     """
-    Supervised InfoNCE loss for motion-language alignment.
+    CLIP-style symmetric cross-modal contrastive loss.
 
-    This contrastive loss pulls together embeddings of matching motion-language
-    pairs (same expression ID) and pushes apart non-matching pairs in the shared
-    feature space. Negatives are formed in-batch automatically.
+    Computes motion→language and language→motion InfoNCE losses over the
+    cross-modal similarity matrix.  When labels are provided, all pairs
+    sharing the same expression ID are treated as positives (supervised).
 
-    Args passed to forward():
-        features: (2N, D) concatenated motion and text embeddings.
-        target:   (2N,) integer class labels — matching pairs share the same ID.
+    This avoids the pitfall of stacking both modalities into one feature
+    vector: identical language embeddings would create trivial lang↔lang
+    positives that dominate the gradient and starve the motion encoder.
     """
 
-    def __init__(self):
-        super().__init__(temperature=0.07)
+    def __init__(self, temperature: float = 0.07):
+        super().__init__()
+        self.temperature = temperature
 
-    def forward(self, features, target):
+    def forward(self, motion_emb: torch.Tensor, lang_emb: torch.Tensor,
+                labels: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            features: (N, D) normalized embedding vectors for all
-                      motion and text samples in the batch.
-            target:   (N,) integer labels — matching pairs share the
-                      same label.
+            motion_emb: (N, D) L2-normalized motion embeddings.
+            lang_emb:   (N, D) L2-normalized language embeddings.
+            labels:     (N,) integer expression IDs.
+
         Returns:
-            Scalar supervised InfoNCE loss.
+            Scalar symmetric cross-modal InfoNCE loss.
         """
-        return super().forward(features, target)
+        # Cross-modal similarity matrix  (N, N)
+        logits = torch.matmul(motion_emb, lang_emb.t()) / self.temperature
+
+        # Positive mask: position (i, j) is 1 when labels[i] == labels[j]
+        pos_mask = (labels.unsqueeze(1) == labels.unsqueeze(0)).float()
+
+        # ── motion → language ──
+        log_prob_m2l = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+        m2l_loss = -(pos_mask * log_prob_m2l).sum(1) / pos_mask.sum(1).clamp(min=1)
+
+        # ── language → motion ──
+        log_prob_l2m = logits - torch.logsumexp(logits, dim=0, keepdim=True)
+        l2m_loss = -(pos_mask * log_prob_l2m).sum(0) / pos_mask.sum(0).clamp(min=1)
+
+        return (m2l_loss.mean() + l2m_loss.mean()) / 2

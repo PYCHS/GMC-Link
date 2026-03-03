@@ -310,7 +310,7 @@ def run_e2e_evaluation(
     gt_scores = []  # Alignment scores for GT-matched detections
     non_gt_scores = []  # Alignment scores for non-GT detections
     frame_results = []  # Per-frame (precision, recall) at threshold
-    score_threshold = 0.4
+    score_threshold = 0.55
 
     for frame_idx, frame_name in enumerate(frame_files):
         frame_path = os.path.join(frame_dir, frame_name)
