@@ -187,9 +187,11 @@ def main() -> None:
     epochs = 500
     lang_dim = 384
 
-    # Refer-KITTI data paths (Train on all available seqs, test on 11)
-    data_root = "refer-kitti"
+    # Refer-KITTI V2 data path and official train/test split
+    # Train: seqs 0000-0015 | Test: seqs 0016-0020
+    data_root = "/home/seanachan/data/Dataset/refer-kitti-v2"
     sequences = [
+        "0000",
         "0001",
         "0002",
         "0003",
@@ -200,13 +202,11 @@ def main() -> None:
         "0008",
         "0009",
         "0010",
+        "0011",
         "0012",
         "0013",
         "0014",
         "0015",
-        "0016",
-        "0018",
-        "0020",
     ]
 
     # --- Pipeline ---
