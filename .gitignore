@@ -216,3 +216,11 @@ __marimo__/
 /NeuralSORT
 Refer-KITTI_labels.json
 /iKUN
+# Video output
+/video
+
+# Logs and eval outputs
+eval_*.txt
+train_log*.txt
+final_eval.txt
+test_mtime.txt

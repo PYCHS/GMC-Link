@@ -23,20 +23,28 @@ class MotionLanguageAligner(nn.Module):
     ) -> None:
         super().__init__()
         # Motion Encoder: Project (dx, dy, dw, dh, cx, cy, w, h) into a semantic vector.
-        # Deeper MLP to learn nuanced motion semantics (e.g., turning vs moving forward)
+        # Wider MLP to learn nuanced motion semantics (e.g., turning vs moving forward)
         self.motion_projector = nn.Sequential(
-            nn.Linear(motion_dim, 64),
+            nn.Linear(motion_dim, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(64, 128),
+            nn.Linear(128, 256),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, embed_dim),
+            nn.Linear(256, 512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, embed_dim),
             nn.LayerNorm(embed_dim),
         )
 
+        # Language Projector: two-layer projection with bottleneck
         self.lang_projector = nn.Sequential(
-            nn.Linear(lang_dim, embed_dim), nn.ReLU(), nn.LayerNorm(embed_dim)
+            nn.Linear(lang_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, embed_dim),
+            nn.LayerNorm(embed_dim),
         )
 
     def encode(
