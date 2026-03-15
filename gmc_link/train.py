@@ -36,9 +36,8 @@ def train_one_epoch(
     Train the model for a single epoch using CLIP-style cross-modal InfoNCE.
 
     For each batch of N (motion, language, expr_id) triples:
-      - Project both modalities to the shared latent space via model.encode()
-      - Pass motion_emb, lang_emb, and labels to the loss function
-      - The loss computes only cross-modal (motion↔language) similarities
+      - Compute NxN cosine similarity matrix via model.forward()
+      - Pass sim_matrix and expr_ids to InfoNCE loss with false-negative masking
 
     Returns:
         Tuple of (average_loss, accuracy).
@@ -54,11 +53,11 @@ def train_one_epoch(
         language_features = language_features.to(device)
         expr_ids = expr_ids.to(device)
 
-        # ── Project to shared embedding space ──
-        motion_emb, lang_emb = model.encode(motion_features, language_features)
+        # ── NxN cosine similarity matrix ──
+        sim_matrix = model(motion_features, language_features)
 
-        # ── CLIP-style cross-modal contrastive loss ──
-        loss = loss_func(motion_emb, lang_emb, expr_ids)
+        # ── InfoNCE loss with false-negative masking ──
+        loss = loss_func(sim_matrix, expr_ids)
 
         optimizer.zero_grad()
         loss.backward()
@@ -67,12 +66,9 @@ def train_one_epoch(
         total_loss += loss.item()
 
         # ── Track retrieval accuracy (motion→language) ──
-        # For each motion embedding, find which language embedding is closest.
-        # A "hit" when the nearest match shares the same expression ID.
-        batch_size = motion_emb.size(0)
+        batch_size = sim_matrix.size(0)
         with torch.no_grad():
-            sim = torch.matmul(motion_emb, lang_emb.t())  # (N, N)
-            nearest_lang_idx = sim.argmax(dim=1)           # (N,)
+            nearest_lang_idx = sim_matrix.argmax(dim=1)
             predicted_ids = expr_ids[nearest_lang_idx]
             correct += (predicted_ids == expr_ids).sum().item()
             total += batch_size
@@ -113,6 +109,7 @@ def setup_data(
         shuffle=True,
         collate_fn=collate_fn,
         pin_memory=True,
+        drop_last=True,  # Consistent batch size for contrastive learning
     )
 
     return dataloader
@@ -182,9 +179,9 @@ def main() -> None:
     )
     print(f"Device: {device}")
 
-    learning_rate = 5e-4
-    batch_size = 128
-    epochs = 500
+    learning_rate = 1e-3
+    batch_size = 512  # Larger batch = more in-batch negatives for InfoNCE
+    epochs = 100
     lang_dim = 384
 
     # Refer-KITTI V2 data path and official train/test split

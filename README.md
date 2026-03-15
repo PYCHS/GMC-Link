@@ -33,8 +33,8 @@ Natural Language Prompt ──► SentenceTransformer Embedding ─────�
 | **MotionLanguageAligner** | `alignment.py`                        | A small MLP that projects an 8D spatio-temporal vector and a 384-dim language embedding into a shared space, then computes a similarity score via dot product.                                            |
 | **TextEncoder**           | `text_utils.py`                       | Wraps `all-MiniLM-L6-v2` (SentenceTransformers) to encode natural language prompts into 384-dim embeddings.                                                                                               |
 | **GMCLinkManager**        | `manager.py`                          | The orchestrator. For each frame: runs GMC, computes compensated velocities for all tracks, and queries the aligner for alignment scores.                                                                 |
-| **Fusion Head**           | `fusion_head.py`                      | Learned MLP that fuses iKUN CLIP logits with GMC-Link motion scores for the best overall accuracy (+1.7% F1 over iKUN alone).                                                                             |
-| **Dataset & Training**    | `dataset.py`, `train.py`, `losses.py` | Builds (motion, language) training pairs from the [Refer-KITTI](https://github.com/wudongming97/RMOT) dataset using BCE loss.                                                                             |
+| **Fusion Head**           | `fusion_head.py`                      | Learned MLP that fuses iKUN CLIP logits with GMC-Link motion scores for the best overall accuracy (+8.4% F1 over iKUN alone).                                                                             |
+| **Dataset & Training**    | `dataset.py`, `train.py`, `losses.py` | Builds (motion, language) training pairs from the [Refer-KITTI](https://github.com/wudongming97/RMOT) dataset using InfoNCE loss with False-Negative Masking.                                              |
 | **Demo Inference**        | `demo_inference.py`                   | End-to-end evaluation on iKUN + GMC-Link fusion across all expressions in a sequence.                                                                                                                      |
 
 ---
@@ -56,7 +56,7 @@ Natural Language Prompt ──► SentenceTransformer Embedding ─────�
 ## Training
 
 - **Dataset**: [Refer-KITTI](https://github.com/wudongming97/RMOT) — KITTI tracking sequences annotated with natural language expressions describing object motion.
-- **Supervision**: BCE loss on (motion, language) pairs. Positive pairs come from ground-truth matches; negative pairs use mismatched sentences.
+- **Supervision**: Symmetric InfoNCE loss with False-Negative Masking (FNM). Positive pairs come from ground-truth matches; negatives are formed in-batch. FNM prevents same-sentence pairs from being treated as false negatives.
 - **Motion keywords filtered**: Only expressions involving motion concepts (`moving`, `turning`, `parking`, `approaching`, etc.) are used — since the model only sees velocity vectors, not appearance.
 
 ---
@@ -121,15 +121,16 @@ python gmc_link/demo_inference.py --multi  # defaults to learned fusion
 
 ## iKUN Integration & Learned Fusion (Best Results)
 
-When paired with [iKUN](https://github.com/dyhBUPT/iKUN) (a CLIP-based RMOT tracker), the **learned fusion head** achieves the best overall accuracy:
+When paired with [iKUN](https://github.com/dyhBUPT/iKUN) (a CLIP-based RMOT tracker), the **InfoNCE-trained aligner + learned fusion head** achieves the best overall accuracy:
 
 | Method | Motion F1 | Appearance F1 | Stationary F1 | Overall F1 | Δ Overall |
 | --- | --- | --- | --- | --- | --- |
 | iKUN baseline | 0.6386 | 0.4338 | 0.6684 | 0.5730 | — |
-| iKUN + OR-logic | **0.6650** | 0.4338 | 0.6684 | 0.5863 | +1.3% |
-| **iKUN + Learned Fusion** | 0.6252 | **0.4792** | **0.6972** | **0.5895** | **+1.7%** |
+| iKUN + OR-logic | 0.6650 | 0.4338 | 0.6684 | 0.5863 | +1.3% |
+| iKUN + BCE Fusion | 0.6252 | 0.4792 | 0.6972 | 0.5895 | +1.7% |
+| **iKUN + InfoNCE Fusion** | **0.7328** | **0.5578** | **0.7134** | **0.6569** | **+8.4%** |
 
-The fusion head is a tiny MLP (`[ikun_logit, gmc_score, is_motion_flag] → 32 → 16 → 1`) trained on paired iKUN and GMC-Link scores. It learns when to trust the kinematic signal vs the visual signal, achieving gains across all expression types.
+The fusion head is a tiny MLP (`[ikun_logit, gmc_score, is_motion_flag] → 32 → 16 → 1`). The key breakthrough is training the GMC-Link aligner with InfoNCE+FNM instead of BCE — the structured contrastive embedding space produces far more discriminative motion scores, enabling +8.4% Overall F1 improvement over iKUN alone.
 
 > **Note:** Feature-level injection of motion embeddings into iKUN's CLIP visual pipeline was also explored (Stage 3) but causes catastrophic regression (−21.7% F1) because additive injection corrupts the CLIP representation. Decision-level fusion is the correct approach.
 

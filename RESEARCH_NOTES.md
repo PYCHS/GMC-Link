@@ -252,18 +252,37 @@ Train a `MotionLanguageAligner` to match 2D velocity vectors with natural langua
   3. v1's +0.6% gain came entirely from fine-tuning `img_fc`/`motion_fc` weights, NOT from motion injection (gate was functionally zero).
 - **Conclusion:** Feature-level additive injection into CLIP visual space is architecturally flawed for this task. The Stage 2 learned fusion head (+1.7%) and Stage 1 OR-logic (+1.3%) remain the most effective approaches because they operate on decision-level scores rather than corrupting intermediate representations.
 
+### Exp 22: InfoNCE Aligner → Learned Fusion Head (Full Pipeline) ✅
+
+- **Motivation:** Exp 20 Stage 2 used a BCE-trained GMC-Link aligner. The BCE loss trains with explicit positive/negative pairs but doesn't learn a structured embedding space. InfoNCE (with False-Negative Masking) learns a CLIP-style shared latent space where cosine similarity directly encodes semantic alignment. Hypothesis: better embedding structure → more discriminative `gmc_score` → better fusion.
+- **Change:** Replaced `AlignmentLoss` (BCE) with symmetric InfoNCE+FNM in `losses.py`. Updated `train.py`: batch_size 128→512 (more in-batch negatives), lr 5e-4→1e-3, epochs 500→100, drop_last=True. Retrained aligner from scratch, then re-ran full fusion pipeline (collect → train fusion head → eval).
+- **Aligner training:** 100 epochs on Refer-KITTI V2 (seqs 0000-0015). Final loss: 5.50 (below ln(512)=6.24 random floor). Retrieval accuracy: 7.59% (random=0.2%, 39x improvement).
+- **Fusion head:** Best val F1: **0.6740** at threshold=0.66 (vs BCE's 0.6183 at 0.72).
+
+#### Results (seq 0011, 64 expressions)
+
+| Method | Motion F1 | Appearance F1 | Stationary F1 | Overall F1 | Δ Overall |
+| --- | --- | --- | --- | --- | --- |
+| iKUN baseline | 0.6386 | 0.4338 | 0.6684 | 0.5730 | — |
+| BCE fusion (Exp 20) | 0.6252 | 0.4792 | 0.6972 | 0.5895 | +1.7% |
+| **InfoNCE fusion** | **0.7328** | **0.5578** | **0.7134** | **0.6569** | **+8.4%** |
+
+- **Analysis:** InfoNCE massively outperforms BCE across all expression types. Motion F1 jumps +9.4pp (0.6386→0.7328), appearance +12.4pp (0.4338→0.5578), stationary +4.5pp (0.6684→0.7134). The structured contrastive embedding space produces `gmc_score` distributions with much better separation between GT and non-GT tracks, giving the fusion head a far more informative signal to work with.
+- **Key insight:** The aligner's loss function matters enormously for downstream fusion quality. BCE learns pointwise scores; InfoNCE learns a metric space. The metric space representation transfers much better to the fusion head because relative score ordering is more consistent.
+
 ---
 
-## Recommended Approach: Stage 2 Learned Fusion Head
+## Recommended Approach: InfoNCE Aligner + Learned Fusion Head
 
-After exhaustive experimentation across 21 experiments, **Stage 2: Learned Fusion Head** is the recommended production approach for iKUN + GMC-Link integration:
+After 22 experiments, **InfoNCE-trained aligner + Stage 2 Learned Fusion Head** is the recommended approach:
 
-- **Best Overall F1:** 0.5895 (+1.7% over iKUN baseline)
-- **Architecture:** `FusionHead([ikun_logit, gmc_score, is_motion_flag] → 32 → 16 → 1)` — a 3-input, 2-hidden-layer MLP with BatchNorm and Dropout.
-- **Weights:** `gmc_link/fusion_head_weights.pth` (threshold=0.72)
-- **Why it wins:** Operates at the decision level, combining iKUN's CLIP-based visual/language scores with GMC-Link's kinematic motion scores without corrupting either representation. Improves appearance (+4.5%) and stationary (+2.9%) categories that iKUN already handles, while trading a small motion regression (−1.3%).
+- **Best Overall F1:** 0.6569 (+8.4% over iKUN baseline)
+- **Aligner:** `MotionLanguageAligner` trained with symmetric InfoNCE+FNM (bs=512, lr=1e-3, 100 epochs)
+- **Fusion Head:** `FusionHead([ikun_logit, gmc_score, is_motion_flag] → 32 → 16 → 1)` (threshold=0.66)
+- **Weights:** `gmc_link_weights.pth` (aligner), `gmc_link/fusion_head_weights.pth` (fusion head)
+- **Why it wins:** InfoNCE learns a structured embedding space where cosine similarity directly encodes motion-language alignment quality. This produces much more discriminative GMC-Link scores that the fusion head can leverage effectively.
 
-**What NOT to do:** Do not inject motion embeddings into iKUN's CLIP visual pipeline (Stage 3). Both BCE and contrastive embeddings cause catastrophic regression (−21.7% F1) when the gate opens. The additive injection mechanism corrupts CLIP's learned representation space. Decision-level fusion is the correct paradigm.
+**What NOT to do:** Do not inject motion embeddings into iKUN's CLIP visual pipeline (Stage 3). Both BCE and contrastive embeddings cause catastrophic regression (−21.7% F1) when the gate opens. Decision-level fusion is the correct paradigm.
 
 ---
 

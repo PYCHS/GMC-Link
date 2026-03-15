@@ -219,6 +219,7 @@ def run_comparison(
     gmc_weight: float = 0.1,
     fusion_mode: str = "suppress",
     visualize: bool = False,
+    **kwargs,
 ) -> dict:
     """
     Compare iKUN-only vs iKUN+GMC-Link on a single Refer-KITTI expression.
@@ -245,7 +246,8 @@ def run_comparison(
     fusion_head_model, fusion_head_thr = None, 0.5
     if is_learned:
         from gmc_link.fusion_head import load_fusion_head
-        fusion_head_model, fusion_head_thr = load_fusion_head()
+        fw = kwargs.get("fusion_weights_path", "gmc_link/fusion_head_weights.pth")
+        fusion_head_model, fusion_head_thr = load_fusion_head(fw)
 
     # ── 1. Initialize ──
     device = (
@@ -616,6 +618,7 @@ def run_multi_expression(
     weights_path: str = "gmc_link_weights.pth",
     fusion_mode: str = "learned",
     gmc_weight: float = 0.65,
+    fusion_weights_path: str = "gmc_link/fusion_head_weights.pth",
 ) -> None:
     """Evaluate across ALL expressions for a sequence, grouped by type."""
     import glob
@@ -638,6 +641,7 @@ def run_multi_expression(
                 track_dir=track_dir, weights_path=weights_path,
                 gmc_weight=gmc_weight, fusion_mode=fusion_mode,
                 visualize=False,
+                fusion_weights_path=fusion_weights_path,
             )
             r["name"] = expr_name
             all_results.append(r)
@@ -730,12 +734,15 @@ if __name__ == "__main__":
         # Parse optional args
         mode = "learned"
         weight = 0.65
+        fusion_weights = "gmc_link/fusion_head_weights.pth"
         for i, arg in enumerate(sys.argv):
             if arg == "--mode" and i + 1 < len(sys.argv):
                 mode = sys.argv[i + 1]
             if arg == "--weight" and i + 1 < len(sys.argv):
                 weight = float(sys.argv[i + 1])
-        run_multi_expression(fusion_mode=mode, gmc_weight=weight)
+            if arg == "--fusion-weights" and i + 1 < len(sys.argv):
+                fusion_weights = sys.argv[i + 1]
+        run_multi_expression(fusion_mode=mode, gmc_weight=weight, fusion_weights_path=fusion_weights)
     else:
         run_comparison(
             sequence="0011",
