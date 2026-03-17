@@ -123,11 +123,11 @@ def setup_model_and_optimizer(
     """
     Initialize the MotionLanguageAligner, InfoNCE loss, and AdamW optimizer.
     """
-    model = MotionLanguageAligner(motion_dim=8, lang_dim=lang_dim, embed_dim=256).to(
+    model = MotionLanguageAligner(motion_dim=9, lang_dim=lang_dim, embed_dim=256).to(
         device
     )
 
-    criterion = AlignmentLoss()
+    criterion = AlignmentLoss(temperature=0.07)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs, eta_min=1e-5
@@ -163,8 +163,13 @@ def train_loop(
                 f"Acc: {accuracy:.2%} | LR: {current_lr:.6f}"
             )
 
-    torch.save(model.state_dict(), save_path)
-    print(f"Training complete. Weights saved to {save_path}")
+    # Save model weights + temperature
+    save_dict = {
+        "model": model.state_dict(),
+        "temperature": criterion.temperature,
+    }
+    torch.save(save_dict, save_path)
+    print(f"Training complete. Weights saved to {save_path} (τ={criterion.temperature:.4f})")
 
 
 def main() -> None:

@@ -45,11 +45,17 @@ class GMCLinkManager:
         self.motion_buffer = MotionBuffer(alpha=0.3)
         self.score_buffer = ScoreBuffer(alpha=0.4)
         self.aligner = MotionLanguageAligner(
-            motion_dim=8, lang_dim=lang_dim, embed_dim=256
+            motion_dim=9, lang_dim=lang_dim, embed_dim=256
         ).to(device)
 
+        self.temperature = 1.0  # default (no scaling)
         if weights_path:
-            self.aligner.load_state_dict(torch.load(weights_path, map_location=device))
+            checkpoint = torch.load(weights_path, map_location=device)
+            if isinstance(checkpoint, dict) and "model" in checkpoint:
+                self.aligner.load_state_dict(checkpoint["model"])
+                self.temperature = checkpoint.get("temperature", 1.0)
+            else:
+                self.aligner.load_state_dict(checkpoint)
         self.aligner.eval()
 
         self.ego_engine = ORBHomographyEngine(max_features=1500)
@@ -62,6 +68,9 @@ class GMCLinkManager:
         
         # Store cumulative homographies: H[i] warps frame[t-i] -> current frame
         self.homography_buffer: deque = deque(maxlen=frame_gap + 1)
+
+        # Background residual buffer for noise floor estimation
+        self.bg_residual_buffer: deque = deque(maxlen=frame_gap + 1)
 
     def process_frame(
         self,
@@ -91,11 +100,12 @@ class GMCLinkManager:
         # CUMULATIVE HOMOGRAPHY UPDATE
         if update_state:
             if self.prev_frame is not None:
-                # Estimate H_{t-1 -> t}
-                H_prev_to_curr = self.ego_engine.estimate_homography(
+                # Estimate H_{t-1 -> t} and background warp residual
+                H_prev_to_curr, bg_residual = self.ego_engine.estimate_homography(
                     self.prev_frame, frame, self.prev_detections
                 )
-                
+                self.bg_residual_buffer.append(bg_residual)
+
                 # Update ALL cumulative homographies by composing with new homography
                 updated_homographies = deque(maxlen=self.frame_gap + 1)
                 for H_old in self.homography_buffer:
@@ -201,14 +211,27 @@ class GMCLinkManager:
                 smoothed_v = np.zeros(4, dtype=np.float32)
                 dx, dy, dw, dh = 0.0, 0.0, 0.0, 0.0
 
-            # Build 8D Spatial-Motion Vector
+            # Build 9D Spatial-Motion Vector (8D + SNR)
             w_n = curr_w / float(img_w)
             h_n = curr_h / float(img_h)
             cx_n = curr_centroid[0] / float(img_w)
             cy_n = curr_centroid[1] / float(img_h)
 
+            # Signal-to-Noise Ratio: object velocity / background noise floor
+            obj_speed = np.sqrt(dx ** 2 + dy ** 2)
+            if len(self.bg_residual_buffer) > 0:
+                bg_stack = np.array(list(self.bg_residual_buffer))
+                bg_max = np.max(np.abs(bg_stack), axis=0)
+                bg_magnitude = np.sqrt(
+                    (bg_max[0] / float(img_w) * VELOCITY_SCALE) ** 2
+                    + (bg_max[1] / float(img_h) * VELOCITY_SCALE) ** 2
+                )
+            else:
+                bg_magnitude = 0.0
+            snr = np.log(obj_speed / (bg_magnitude + 1e-6) + 1.0)
+
             spatial_motion = np.array(
-                [dx, dy, dw, dh, cx_n, cy_n, w_n, h_n], dtype=np.float32
+                [dx, dy, dw, dh, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
             )
 
             track_ids.append(tid)
@@ -226,9 +249,9 @@ class GMCLinkManager:
             motion_emb, lang_emb = self.aligner.encode(
                 motion_tensor, language_embedding.to(self.device)
             )
-            # Cosine similarity in [-1, 1], remapped to [0, 1]
+            # Cosine similarity scaled by learned temperature → sigmoid to [0, 1]
             cosine_sim = torch.matmul(motion_emb, lang_emb.t()).flatten()
-            raw_scores = ((cosine_sim + 1.0) / 2.0).cpu().numpy()
+            raw_scores = torch.sigmoid(cosine_sim / self.temperature).cpu().numpy()
 
         # Apply score smoothing for temporal consistency
         scores_dict = {}

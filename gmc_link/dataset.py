@@ -40,7 +40,7 @@ class MotionLanguageDataset(Dataset):
 
 
 def collate_fn(batch):
-    """Stack into (Batch, 8) motion, (Batch, L_dim) language, and (Batch,) integer labels."""
+    """Stack into (Batch, 10) motion, (Batch, L_dim) language, and (Batch,) integer labels."""
     motion_batch = torch.stack([item[0] for item in batch], dim=0)
     language_batch = torch.stack([item[1] for item in batch], dim=0)
     label_batch = torch.stack([item[2] for item in batch], dim=0)
@@ -275,7 +275,7 @@ def _generate_positive_pairs(
             if frame_dir is not None and orb_engine is not None and seq is not None:
                 cache_key = (seq, curr_fid, future_fid)
                 if cache_key in HOMOGRAPHY_CACHE:
-                    homography = HOMOGRAPHY_CACHE[cache_key]
+                    homography, bg_residual = HOMOGRAPHY_CACHE[cache_key]
                 else:
                     curr_img_path = os.path.join(frame_dir, f"{curr_fid:06d}.png")
                     future_img_path = os.path.join(frame_dir, f"{future_fid:06d}.png")
@@ -284,12 +284,13 @@ def _generate_positive_pairs(
                     img_future = cv2.imread(future_img_path)
 
                     if img_curr is not None and img_future is not None:
-                        homography = orb_engine.estimate_homography(
+                        homography, bg_residual = orb_engine.estimate_homography(
                             img_curr, img_future, prev_bboxes=None
                         )
                     else:
                         homography = None
-                    HOMOGRAPHY_CACHE[cache_key] = homography
+                        bg_residual = np.zeros(2, dtype=np.float32)
+                    HOMOGRAPHY_CACHE[cache_key] = (homography, bg_residual)
 
                 if homography is not None:
                     cx1, cy1, bw1, bh1 = centroids[curr_fid]
@@ -305,7 +306,7 @@ def _generate_positive_pairs(
                     warped_pts = warp_points(pts, homography)
                     wcx1, wcy1 = warped_pts[0]
 
-                    # 8D Spatio-Temporal Features
+                    # 9D Spatio-Temporal Features (8D + SNR)
                     dx = (j_cx2 - wcx1) / w * VELOCITY_SCALE
                     dy = (j_cy2 - wcy1) / h * VELOCITY_SCALE
                     dw = (j_bw2 - bw1) / w * VELOCITY_SCALE
@@ -313,8 +314,14 @@ def _generate_positive_pairs(
 
                     cx_n, cy_n = cx1 / w, cy1 / h
                     bw_n, bh_n = bw1 / w, bh1 / h
+                    obj_speed = np.sqrt(dx ** 2 + dy ** 2)
+                    bg_mag = np.sqrt(
+                        (bg_residual[0] / w * VELOCITY_SCALE) ** 2
+                        + (bg_residual[1] / h * VELOCITY_SCALE) ** 2
+                    )
+                    snr = np.log(obj_speed / (bg_mag + 1e-6) + 1.0)
                     motion_vec = np.array(
-                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
+                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n, snr], dtype=np.float32
                     )
                 else:
                     cx1, cy1, bw1, bh1 = centroids[curr_fid]
@@ -326,11 +333,12 @@ def _generate_positive_pairs(
 
                     cx_n, cy_n = cx1 / w, cy1 / h
                     bw_n, bh_n = bw1 / w, bh1 / h
+                    # No homography → no bg info → SNR unknown, use 0
                     motion_vec = np.array(
-                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
+                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n, 0.0], dtype=np.float32
                     )
             else:
-                # Fallback: raw centroid differences
+                # Fallback: raw centroid differences (no homography available)
                 cx1, cy1, bw1, bh1 = centroids[curr_fid]
                 cx2, cy2, bw2, bh2 = centroids[future_fid]
                 dx = (cx2 - cx1) / w * VELOCITY_SCALE
@@ -341,7 +349,7 @@ def _generate_positive_pairs(
                 cx_n, cy_n = cx1 / w, cy1 / h
                 bw_n, bh_n = bw1 / w, bh1 / h
                 motion_vec = np.array(
-                    [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n], dtype=np.float32
+                    [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n, 0.0], dtype=np.float32
                 )
 
             # Positive pair: this motion matches this expression

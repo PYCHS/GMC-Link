@@ -5,6 +5,7 @@ Core utilities for extracting camera ego-motion via ORB features and homography.
 from typing import Optional, List, Tuple
 import cv2
 import numpy as np
+from .utils import warp_points
 class ORBHomographyEngine:
     """
     Compute rigid background motion (ego-motion) between frames using ORB features
@@ -21,10 +22,14 @@ class ORBHomographyEngine:
         prev_frame: np.ndarray,
         curr_frame: np.ndarray,
         prev_bboxes: Optional[List[Tuple[float, float, float, float]]] = None,
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Estimate the 3x3 homography matrix H_prev_to_curr that transforms points
         from prev_frame to curr_frame coordinates.
+
+        Returns:
+            (H, bg_residual): H is 3x3 homography; bg_residual is (2,) median
+            absolute warp residual of RANSAC inliers in pixels (background noise floor).
         """
         prev_gray = (
             cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
@@ -52,7 +57,7 @@ class ORBHomographyEngine:
         kp2, des2 = self.orb.detectAndCompute(curr_gray, mask=None)
 
         if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
-            return np.eye(3, dtype=np.float32)
+            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
 
         matches = self.matcher.knnMatch(des1, des2, k=2)
         good_matches = []
@@ -65,7 +70,7 @@ class ORBHomographyEngine:
                 good_matches.append(match_pair[0])
 
         if len(good_matches) < 4:
-            return np.eye(3, dtype=np.float32)
+            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
 
         src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(
             -1, 1, 2
@@ -74,9 +79,21 @@ class ORBHomographyEngine:
             -1, 1, 2
         )
 
-        homography_matrix, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        homography_matrix, inlier_mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
 
         if homography_matrix is None:
-            return np.eye(3, dtype=np.float32)
+            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
 
-        return homography_matrix.astype(np.float32)
+        # Compute background residual: median abs warp error of RANSAC inliers
+        H = homography_matrix.astype(np.float32)
+        if inlier_mask is not None and inlier_mask.sum() > 0:
+            inlier_idx = inlier_mask.ravel().astype(bool)
+            src_inliers = src_pts[inlier_idx].reshape(-1, 2)
+            dst_inliers = dst_pts[inlier_idx].reshape(-1, 2)
+            warped_src = warp_points(src_inliers, H)
+            residuals = np.abs(dst_inliers - warped_src)
+            bg_residual = np.median(residuals, axis=0).astype(np.float32)
+        else:
+            bg_residual = np.zeros(2, dtype=np.float32)
+
+        return H, bg_residual
