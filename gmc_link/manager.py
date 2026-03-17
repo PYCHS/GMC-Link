@@ -32,12 +32,15 @@ class GMCLinkManager:
     This provides better numerical stability and debugging capabilities.
     """
 
+    # Multi-scale frame gaps matching training
+    FRAME_GAPS = [2, 5, 10]  # short, mid, long
+
     def __init__(
         self,
         weights_path: str = None,
         device: str = "cpu",
         lang_dim: int = 384,
-        frame_gap: int = 5,
+        frame_gap: int = 10,  # max gap for buffer sizing
     ) -> None:
         self.device = device
         self.frame_gap = frame_gap
@@ -45,7 +48,7 @@ class GMCLinkManager:
         self.motion_buffer = MotionBuffer(alpha=0.3)
         self.score_buffer = ScoreBuffer(alpha=0.4)
         self.aligner = MotionLanguageAligner(
-            motion_dim=9, lang_dim=lang_dim, embed_dim=256
+            motion_dim=13, lang_dim=lang_dim, embed_dim=256
         ).to(device)
 
         self.temperature = 1.0  # default (no scaling)
@@ -65,7 +68,7 @@ class GMCLinkManager:
         # CUMULATIVE HOMOGRAPHY: Store original coordinates (never warped)
         self.centroid_history: Dict[int, deque] = {}
         self.wh_history: Dict[int, deque] = {}
-        
+
         # Store cumulative homographies: H[i] warps frame[t-i] -> current frame
         self.homography_buffer: deque = deque(maxlen=frame_gap + 1)
 
@@ -164,34 +167,43 @@ class GMCLinkManager:
                 # WARP ORIGINAL COORDINATES TO CURRENT FRAME (warp once!)
                 T = len(centroid_hist)
                 homographies = list(self.homography_buffer)[-T:]
-                
+
                 # Ensure we have enough homographies
                 while len(homographies) < T:
                     homographies.insert(0, np.eye(3, dtype=np.float32))
-                
+
                 # Warp ORIGINAL coordinates to current frame
                 world_frame_centroids = []
                 for centroid, H in zip(centroid_hist, homographies):
                     warped = warp_points(np.array([centroid]), H)
                     world_frame_centroids.append(warped[0])
-                
-                # Compute velocity from world-frame coordinates
-                world_frame_first = world_frame_centroids[0]
-                world_frame_last = world_frame_centroids[-1]
-                
-                raw_velocity = world_frame_last - world_frame_first
-                norm_velocity = normalize_velocity(raw_velocity, frame_shape)
 
-                # Z-axis depth scaling velocity (dw, dh)
-                raw_dw_dh = wh_hist[-1] - wh_hist[0]
+                # Multi-scale velocity: compute dx, dy at each gap
+                scale_velocities = []
+                for gap in self.FRAME_GAPS:
+                    if T > gap:
+                        v_raw = world_frame_centroids[-1] - world_frame_centroids[-(gap + 1)]
+                        v_norm = normalize_velocity(v_raw, frame_shape)
+                        scale_velocities.append(v_norm)
+                    else:
+                        scale_velocities.append(np.zeros(2, dtype=np.float32))
+
+                # dw, dh from mid-scale (index 1, gap=5) or full history
+                mid_gap = self.FRAME_GAPS[1]
+                if T > mid_gap:
+                    raw_dw_dh = wh_hist[-1] - wh_hist[-(mid_gap + 1)]
+                else:
+                    raw_dw_dh = wh_hist[-1] - wh_hist[0]
                 dw_raw = raw_dw_dh[0] / float(img_w) * VELOCITY_SCALE
                 dh_raw = raw_dw_dh[1] / float(img_h) * VELOCITY_SCALE
 
-                # Smooth the FULL 4D kinematic vector to absorb YOLO jitter
-                full_raw_v = np.array(
-                    [norm_velocity[0], norm_velocity[1], dw_raw, dh_raw],
-                    dtype=np.float32,
-                )
+                # Smooth the full 8D multi-scale kinematic vector
+                full_raw_v = np.array([
+                    scale_velocities[0][0], scale_velocities[0][1],  # short
+                    scale_velocities[1][0], scale_velocities[1][1],  # mid
+                    scale_velocities[2][0], scale_velocities[2][1],  # long
+                    dw_raw, dh_raw,
+                ], dtype=np.float32)
                 if update_state:
                     smoothed_v = self.motion_buffer.smooth(tid, full_raw_v)
                 else:
@@ -200,25 +212,26 @@ class GMCLinkManager:
                         smoothed_v = (alpha * full_raw_v) + ((1 - alpha) * self.motion_buffer.registry[tid])
                     else:
                         smoothed_v = full_raw_v
-                dx, dy, dw, dh = (
-                    smoothed_v[0],
-                    smoothed_v[1],
-                    smoothed_v[2],
-                    smoothed_v[3],
-                )
+                dx_s, dy_s = smoothed_v[0], smoothed_v[1]
+                dx_m, dy_m = smoothed_v[2], smoothed_v[3]
+                dx_l, dy_l = smoothed_v[4], smoothed_v[5]
+                dw, dh = smoothed_v[6], smoothed_v[7]
             else:
                 # First appearance: zero velocity
-                smoothed_v = np.zeros(4, dtype=np.float32)
-                dx, dy, dw, dh = 0.0, 0.0, 0.0, 0.0
+                smoothed_v = np.zeros(8, dtype=np.float32)
+                dx_s, dy_s = 0.0, 0.0
+                dx_m, dy_m = 0.0, 0.0
+                dx_l, dy_l = 0.0, 0.0
+                dw, dh = 0.0, 0.0
 
-            # Build 9D Spatial-Motion Vector (8D + SNR)
+            # Build 13D Multi-Scale Spatial-Motion Vector
             w_n = curr_w / float(img_w)
             h_n = curr_h / float(img_h)
             cx_n = curr_centroid[0] / float(img_w)
             cy_n = curr_centroid[1] / float(img_h)
 
-            # Signal-to-Noise Ratio: object velocity / background noise floor
-            obj_speed = np.sqrt(dx ** 2 + dy ** 2)
+            # SNR from mid-scale velocity
+            obj_speed = np.sqrt(dx_m ** 2 + dy_m ** 2)
             if len(self.bg_residual_buffer) > 0:
                 bg_stack = np.array(list(self.bg_residual_buffer))
                 bg_max = np.max(np.abs(bg_stack), axis=0)
@@ -228,10 +241,11 @@ class GMCLinkManager:
                 )
             else:
                 bg_magnitude = 0.0
-            snr = np.log(obj_speed / (bg_magnitude + 1e-6) + 1.0)
+            snr = obj_speed / (bg_magnitude + 1e-6)
 
             spatial_motion = np.array(
-                [dx, dy, dw, dh, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
+                [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh,
+                 cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
             )
 
             track_ids.append(tid)

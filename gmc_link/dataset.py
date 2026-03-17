@@ -15,6 +15,9 @@ from gmc_link.core import ORBHomographyEngine
 
 HOMOGRAPHY_CACHE = {}
 
+# Multi-scale frame gaps for temporal velocity features
+FRAME_GAPS = [2, 5, 10]  # short, mid, long
+
 
 class MotionLanguageDataset(Dataset):
     """
@@ -230,129 +233,162 @@ def _extract_target_centroids(
     return track_centroids
 
 
+def _find_future_frame(sorted_frames, start_idx, gap):
+    """Find the best future frame index at approximately `gap` frames ahead."""
+    curr_fid = sorted_frames[start_idx]
+    target_fid = curr_fid + gap
+    for j in range(start_idx + 1, len(sorted_frames)):
+        if sorted_frames[j] >= target_fid:
+            if sorted_frames[j] - curr_fid > gap * 2:
+                return None
+            return j
+    return None
+
+
+def _compute_velocity_at_gap(
+    centroids, curr_fid, future_fid, frame_shape, seq, frame_dir, orb_engine
+):
+    """
+    Compute ego-motion-compensated (dx, dy) and bg_residual for a single frame pair.
+    Returns (dx, dy, bg_residual) or None if homography fails.
+    """
+    h, w = frame_shape
+
+    if frame_dir is not None and orb_engine is not None and seq is not None:
+        cache_key = (seq, curr_fid, future_fid)
+        if cache_key in HOMOGRAPHY_CACHE:
+            homography, bg_residual = HOMOGRAPHY_CACHE[cache_key]
+        else:
+            curr_img_path = os.path.join(frame_dir, f"{curr_fid:06d}.png")
+            future_img_path = os.path.join(frame_dir, f"{future_fid:06d}.png")
+            img_curr = cv2.imread(curr_img_path)
+            img_future = cv2.imread(future_img_path)
+            if img_curr is not None and img_future is not None:
+                homography, bg_residual = orb_engine.estimate_homography(
+                    img_curr, img_future, prev_bboxes=None
+                )
+            else:
+                homography = None
+                bg_residual = np.zeros(2, dtype=np.float32)
+            HOMOGRAPHY_CACHE[cache_key] = (homography, bg_residual)
+
+        cx1, cy1, _, _ = centroids[curr_fid]
+        cx2, cy2, _, _ = centroids[future_fid]
+
+        # Synthetic jitter (+/- 2 pixels)
+        j_cx2 = cx2 + np.random.uniform(-2.0, 2.0)
+        j_cy2 = cy2 + np.random.uniform(-2.0, 2.0)
+
+        if homography is not None:
+            pts = np.array([[cx1, cy1]], dtype=np.float32)
+            warped_pts = warp_points(pts, homography)
+            wcx1, wcy1 = warped_pts[0]
+            dx = (j_cx2 - wcx1) / w * VELOCITY_SCALE
+            dy = (j_cy2 - wcy1) / h * VELOCITY_SCALE
+            return dx, dy, bg_residual
+        else:
+            dx = (j_cx2 - cx1) / w * VELOCITY_SCALE
+            dy = (j_cy2 - cy1) / h * VELOCITY_SCALE
+            return dx, dy, np.zeros(2, dtype=np.float32)
+    else:
+        cx1, cy1, _, _ = centroids[curr_fid]
+        cx2, cy2, _, _ = centroids[future_fid]
+        dx = (cx2 - cx1) / w * VELOCITY_SCALE
+        dy = (cy2 - cy1) / h * VELOCITY_SCALE
+        return dx, dy, np.zeros(2, dtype=np.float32)
+
+
 def _generate_positive_pairs(
     track_centroids: Dict[int, Dict[int, Tuple[float, float, float, float]]],
     embedding: np.ndarray,
     expression_id: int,
-    frame_gap: int,
+    frame_gaps: List[int],
     frame_shape: Tuple[int, int],
     seq: str = None,
     frame_dir: str = None,
     orb_engine: Any = None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[int]]:
     """
-    Generate positive (motion, language) pairs for contrastive training.
-    Negatives are formed in-batch by SupervisedInfoNCE — samples with different
-    expression_id values automatically contrast against each other.
+    Generate positive (motion, language) pairs with multi-scale temporal velocities.
 
-    Uses ORBHomographyEngine to warp centroids to absolute world velocities.
+    For each anchor frame, computes velocity at multiple time scales (short/mid/long).
+    Missing scales are zero-filled. A sample is generated if at least one scale is available.
+
+    13D vector: [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh, cx, cy, w, h, snr]
     """
     h, w = frame_shape
     motion_data = []
     language_data = []
     labels = []
 
+    primary_gap_idx = 1  # mid-scale (gap=5) is the primary for dw/dh/snr
+
     for tid, centroids in track_centroids.items():
         sorted_frames = sorted(centroids.keys())
         for i in range(len(sorted_frames)):
             curr_fid = sorted_frames[i]
-            target_fid = curr_fid + frame_gap
 
-            best_j = None
-            for j in range(i + 1, len(sorted_frames)):
-                if sorted_frames[j] >= target_fid:
-                    best_j = j
-                    break
+            # Find future frames at each scale
+            scale_velocities = []
+            best_bg_residual = np.zeros(2, dtype=np.float32)
+            any_valid = False
 
-            if best_j is None:
+            for gap_idx, gap in enumerate(frame_gaps):
+                future_j = _find_future_frame(sorted_frames, i, gap)
+                if future_j is not None:
+                    future_fid = sorted_frames[future_j]
+                    result = _compute_velocity_at_gap(
+                        centroids, curr_fid, future_fid, frame_shape,
+                        seq, frame_dir, orb_engine,
+                    )
+                    dx, dy, bg_res = result
+                    scale_velocities.append((dx, dy))
+                    any_valid = True
+                    # Use primary scale's bg_residual for SNR
+                    if gap_idx == primary_gap_idx:
+                        best_bg_residual = bg_res
+                else:
+                    scale_velocities.append((0.0, 0.0))
+
+            if not any_valid:
                 continue
 
-            future_fid = sorted_frames[best_j]
-            if future_fid - curr_fid > frame_gap * 2:
-                continue
-
-            # --- ORB Homography compensated velocity with Jitter ---
-            if frame_dir is not None and orb_engine is not None and seq is not None:
-                cache_key = (seq, curr_fid, future_fid)
-                if cache_key in HOMOGRAPHY_CACHE:
-                    homography, bg_residual = HOMOGRAPHY_CACHE[cache_key]
-                else:
-                    curr_img_path = os.path.join(frame_dir, f"{curr_fid:06d}.png")
-                    future_img_path = os.path.join(frame_dir, f"{future_fid:06d}.png")
-
-                    img_curr = cv2.imread(curr_img_path)
-                    img_future = cv2.imread(future_img_path)
-
-                    if img_curr is not None and img_future is not None:
-                        homography, bg_residual = orb_engine.estimate_homography(
-                            img_curr, img_future, prev_bboxes=None
-                        )
-                    else:
-                        homography = None
-                        bg_residual = np.zeros(2, dtype=np.float32)
-                    HOMOGRAPHY_CACHE[cache_key] = (homography, bg_residual)
-
-                if homography is not None:
-                    cx1, cy1, bw1, bh1 = centroids[curr_fid]
-                    cx2, cy2, bw2, bh2 = centroids[future_fid]
-
-                    # Synthetic Jitter (+/- 2 pixels) to harden against YOLO noise
-                    j_cx2 = cx2 + np.random.uniform(-2.0, 2.0)
-                    j_cy2 = cy2 + np.random.uniform(-2.0, 2.0)
-                    j_bw2 = bw2 + np.random.uniform(-2.0, 2.0)
-                    j_bh2 = bh2 + np.random.uniform(-2.0, 2.0)
-
-                    pts = np.array([[cx1, cy1]], dtype=np.float32)
-                    warped_pts = warp_points(pts, homography)
-                    wcx1, wcy1 = warped_pts[0]
-
-                    # 9D Spatio-Temporal Features (8D + SNR)
-                    dx = (j_cx2 - wcx1) / w * VELOCITY_SCALE
-                    dy = (j_cy2 - wcy1) / h * VELOCITY_SCALE
-                    dw = (j_bw2 - bw1) / w * VELOCITY_SCALE
-                    dh = (j_bh2 - bh1) / h * VELOCITY_SCALE
-
-                    cx_n, cy_n = cx1 / w, cy1 / h
-                    bw_n, bh_n = bw1 / w, bh1 / h
-                    obj_speed = np.sqrt(dx ** 2 + dy ** 2)
-                    bg_mag = np.sqrt(
-                        (bg_residual[0] / w * VELOCITY_SCALE) ** 2
-                        + (bg_residual[1] / h * VELOCITY_SCALE) ** 2
-                    )
-                    snr = np.log(obj_speed / (bg_mag + 1e-6) + 1.0)
-                    motion_vec = np.array(
-                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n, snr], dtype=np.float32
-                    )
-                else:
-                    cx1, cy1, bw1, bh1 = centroids[curr_fid]
-                    cx2, cy2, bw2, bh2 = centroids[future_fid]
-                    dx = (cx2 - cx1) / w * VELOCITY_SCALE
-                    dy = (cy2 - cy1) / h * VELOCITY_SCALE
-                    dw = (bw2 - bw1) / w * VELOCITY_SCALE
-                    dh = (bh2 - bh1) / h * VELOCITY_SCALE
-
-                    cx_n, cy_n = cx1 / w, cy1 / h
-                    bw_n, bh_n = bw1 / w, bh1 / h
-                    # No homography → no bg info → SNR unknown, use 0
-                    motion_vec = np.array(
-                        [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n, 0.0], dtype=np.float32
-                    )
+            # dw, dh from primary scale (mid)
+            primary_future_j = _find_future_frame(sorted_frames, i, frame_gaps[primary_gap_idx])
+            if primary_future_j is not None:
+                future_fid = sorted_frames[primary_future_j]
+                _, _, bw1, bh1 = centroids[curr_fid]
+                _, _, bw2, bh2 = centroids[future_fid]
+                j_bw2 = bw2 + np.random.uniform(-2.0, 2.0)
+                j_bh2 = bh2 + np.random.uniform(-2.0, 2.0)
+                dw = (j_bw2 - bw1) / w * VELOCITY_SCALE
+                dh = (j_bh2 - bh1) / h * VELOCITY_SCALE
             else:
-                # Fallback: raw centroid differences (no homography available)
-                cx1, cy1, bw1, bh1 = centroids[curr_fid]
-                cx2, cy2, bw2, bh2 = centroids[future_fid]
-                dx = (cx2 - cx1) / w * VELOCITY_SCALE
-                dy = (cy2 - cy1) / h * VELOCITY_SCALE
-                dw = (bw2 - bw1) / w * VELOCITY_SCALE
-                dh = (bh2 - bh1) / h * VELOCITY_SCALE
+                dw, dh = 0.0, 0.0
+                _, _, bw1, bh1 = centroids[curr_fid]
 
-                cx_n, cy_n = cx1 / w, cy1 / h
-                bw_n, bh_n = bw1 / w, bh1 / h
-                motion_vec = np.array(
-                    [dx, dy, dw, dh, cx_n, cy_n, bw_n, bh_n, 0.0], dtype=np.float32
-                )
+            # Spatial features from anchor frame
+            cx1, cy1, bw1, bh1 = centroids[curr_fid]
+            cx_n, cy_n = cx1 / w, cy1 / h
+            bw_n, bh_n = bw1 / w, bh1 / h
 
-            # Positive pair: this motion matches this expression
+            # SNR from primary (mid) scale velocity
+            mid_dx, mid_dy = scale_velocities[primary_gap_idx]
+            obj_speed = np.sqrt(mid_dx ** 2 + mid_dy ** 2)
+            bg_mag = np.sqrt(
+                (best_bg_residual[0] / w * VELOCITY_SCALE) ** 2
+                + (best_bg_residual[1] / h * VELOCITY_SCALE) ** 2
+            )
+            snr = obj_speed / (bg_mag + 1e-6)
+
+            # 13D: [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh, cx, cy, w, h, snr]
+            motion_vec = np.array([
+                scale_velocities[0][0], scale_velocities[0][1],  # short
+                scale_velocities[1][0], scale_velocities[1][1],  # mid
+                scale_velocities[2][0], scale_velocities[2][1],  # long
+                dw, dh, cx_n, cy_n, bw_n, bh_n, snr,
+            ], dtype=np.float32)
+
             motion_data.append(motion_vec)
             language_data.append(embedding.copy())
             labels.append(expression_id)
@@ -364,7 +400,7 @@ def build_training_data(
     data_root: str,
     sequences: List[str],
     text_encoder: Any,
-    frame_gap: int = 5,
+    frame_gaps: List[int] = None,
     frame_shape: Tuple[int, int] = (375, 1242),
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[int]]:
     """
@@ -374,8 +410,10 @@ def build_training_data(
     to the same expression share that ID, so SupervisedInfoNCE treats them as
     positives and everything else as in-batch negatives.
 
-    Uses ORB Homography and centroid-difference tracking for ego-motion compensation.
+    Uses multi-scale frame gaps for temporal velocity features (13D vectors).
     """
+    if frame_gaps is None:
+        frame_gaps = FRAME_GAPS
     all_expressions, sentence_embeddings, all_sentences = _collect_expressions(
         data_root, sequences, text_encoder
     )
@@ -394,7 +432,12 @@ def build_training_data(
     language_data = []
     labels = []
 
-    for expr in all_expressions:
+    # Filter to motion-relevant expressions only — appearance-only sentences
+    # like "red cars" add noise since motion vectors can't encode color/shape
+    motion_expressions = [e for e in all_expressions if is_motion_expression(e["sentence"])]
+    print(f"  Motion-filtered: {len(motion_expressions)}/{len(all_expressions)} expressions")
+
+    for expr in motion_expressions:
         seq = expr["seq"]
         label_map = expr["label"]
         sentence = expr["sentence"]
@@ -420,7 +463,7 @@ def build_training_data(
             track_centroids,
             embedding,
             expression_id,
-            frame_gap,
+            frame_gaps,
             actual_shape,
             seq=seq,
             frame_dir=frame_dir,

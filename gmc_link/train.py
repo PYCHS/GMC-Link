@@ -82,7 +82,6 @@ def setup_data(
     data_root: str,
     sequences: list,
     batch_size: int,
-    frame_gap: int = 5,
 ) -> Optional[DataLoader]:
     """
     Initialize text encoder, build training dataset, and return a DataLoader.
@@ -95,7 +94,6 @@ def setup_data(
         data_root=data_root,
         sequences=sequences,
         text_encoder=encoder,
-        frame_gap=frame_gap,
     )
 
     print(f"Total training samples: {len(all_motions)}")
@@ -110,6 +108,8 @@ def setup_data(
         collate_fn=collate_fn,
         pin_memory=True,
         drop_last=True,  # Consistent batch size for contrastive learning
+        num_workers=4,
+        persistent_workers=True,
     )
 
     return dataloader
@@ -123,7 +123,7 @@ def setup_model_and_optimizer(
     """
     Initialize the MotionLanguageAligner, InfoNCE loss, and AdamW optimizer.
     """
-    model = MotionLanguageAligner(motion_dim=9, lang_dim=lang_dim, embed_dim=256).to(
+    model = MotionLanguageAligner(motion_dim=13, lang_dim=lang_dim, embed_dim=256).to(
         device
     )
 
@@ -185,7 +185,7 @@ def main() -> None:
     print(f"Device: {device}")
 
     learning_rate = 1e-3
-    batch_size = 512  # Larger batch = more in-batch negatives for InfoNCE
+    batch_size = 512  # Balanced: enough in-batch negatives without diluting unique classes
     epochs = 100
     lang_dim = 384
 

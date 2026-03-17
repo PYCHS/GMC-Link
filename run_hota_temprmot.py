@@ -44,7 +44,7 @@ TRACKEVAL_DIR = "/home/seanachan/TempRMOT/TrackEval"
 TRACKEVAL_SCRIPT = os.path.join(TRACKEVAL_DIR, "scripts", "run_mot_challenge.py")
 
 OUTPUT_ROOT = "hota_eval/temprmot_gmclink"
-FRAME_GAP = 5
+FRAME_GAP = 10  # max gap for multi-scale temporal features
 
 
 # ── Pre-compute ego-motion ──────────────────────────────────────────────
@@ -172,6 +172,10 @@ def score_expression(
     frame_shape = (img_h, img_w)
     frame_scores = {}
 
+    MULTI_GAPS = [2, 5, 10]  # short, mid, long — must match training
+    max_gap = max(MULTI_GAPS)
+    mid_gap_idx = 1  # index of primary (mid) scale
+
     for frame_0idx in range(num_frames):
         frame_1idx = frame_0idx + 1
         if frame_1idx not in pred_tracks:
@@ -190,61 +194,71 @@ def score_expression(
             curr_centroid = np.array([cx, cy], dtype=np.float64)
 
             if tid not in centroid_history:
-                centroid_history[tid] = deque(maxlen=frame_gap + 1)
-                wh_history[tid] = deque(maxlen=frame_gap + 1)
+                centroid_history[tid] = deque(maxlen=max_gap + 1)
+                wh_history[tid] = deque(maxlen=max_gap + 1)
 
             centroid_history[tid].append((frame_0idx, curr_centroid))
             wh_history[tid].append((frame_0idx, np.array([w, h], dtype=np.float64)))
 
-            # Compute ego-compensated velocity
             ch = list(centroid_history[tid])
             wh = list(wh_history[tid])
 
+            from gmc_link.utils import warp_points
+
             if len(ch) > 1:
-                # Get the oldest and newest entries
-                oldest_f0, oldest_c = ch[0]
                 newest_f0, newest_c = ch[-1]
 
-                # Use cumulative homographies to warp oldest centroid to current frame
-                gap = newest_f0 - oldest_f0
-                if gap > 0 and gap <= len(cum_H) - 1:
-                    # cum_H[-1] = identity (current frame)
-                    # cum_H[-(gap+1)] maps frame[t-gap] → frame[t]
-                    idx = len(cum_H) - 1 - gap
-                    if idx >= 0:
-                        H_old_to_curr = cum_H[idx]
+                # Multi-scale velocity
+                scale_velocities = []
+                for gap in MULTI_GAPS:
+                    if len(ch) > gap:
+                        old_f0, old_c = ch[-(gap + 1)]
+                        actual_gap = newest_f0 - old_f0
+                        if actual_gap > 0 and actual_gap <= len(cum_H) - 1:
+                            idx = len(cum_H) - 1 - actual_gap
+                            H_old = cum_H[idx] if idx >= 0 else np.eye(3, dtype=np.float32)
+                        else:
+                            H_old = np.eye(3, dtype=np.float32)
+                        warped_old = warp_points(np.array([old_c]), H_old)[0]
+                        raw_v = newest_c - warped_old
+                        scale_velocities.append(normalize_velocity(raw_v, frame_shape))
                     else:
-                        H_old_to_curr = np.eye(3, dtype=np.float32)
+                        scale_velocities.append(np.zeros(2, dtype=np.float32))
+
+                # dw, dh from mid-scale
+                mid_gap = MULTI_GAPS[mid_gap_idx]
+                if len(wh) > mid_gap:
+                    raw_dw_dh = wh[-1][1] - wh[-(mid_gap + 1)][1]
                 else:
-                    H_old_to_curr = np.eye(3, dtype=np.float32)
-
-                from gmc_link.utils import warp_points
-                warped_old = warp_points(np.array([oldest_c]), H_old_to_curr)[0]
-
-                raw_velocity = newest_c - warped_old
-                norm_velocity = normalize_velocity(raw_velocity, frame_shape)
-
-                # Size change
-                oldest_wh = wh[0][1]
-                newest_wh = wh[-1][1]
-                raw_dw_dh = newest_wh - oldest_wh
+                    raw_dw_dh = wh[-1][1] - wh[0][1]
                 dw_raw = raw_dw_dh[0] / float(img_w) * VELOCITY_SCALE
                 dh_raw = raw_dw_dh[1] / float(img_h) * VELOCITY_SCALE
 
-                full_v = np.array([norm_velocity[0], norm_velocity[1], dw_raw, dh_raw], dtype=np.float32)
+                full_v = np.array([
+                    scale_velocities[0][0], scale_velocities[0][1],
+                    scale_velocities[1][0], scale_velocities[1][1],
+                    scale_velocities[2][0], scale_velocities[2][1],
+                    dw_raw, dh_raw,
+                ], dtype=np.float32)
                 smoothed_v = motion_buffer.smooth(tid, full_v)
-                dx, dy, dw_s, dh_s = smoothed_v
+                dx_s, dy_s = smoothed_v[0], smoothed_v[1]
+                dx_m, dy_m = smoothed_v[2], smoothed_v[3]
+                dx_l, dy_l = smoothed_v[4], smoothed_v[5]
+                dw_s, dh_s = smoothed_v[6], smoothed_v[7]
             else:
-                dx, dy, dw_s, dh_s = 0.0, 0.0, 0.0, 0.0
+                dx_s, dy_s = 0.0, 0.0
+                dx_m, dy_m = 0.0, 0.0
+                dx_l, dy_l = 0.0, 0.0
+                dw_s, dh_s = 0.0, 0.0
 
-            # 9D spatial-motion vector (8D + SNR)
+            # 13D spatial-motion vector
             w_n = w / float(img_w)
             h_n = h / float(img_h)
             cx_n = cx / float(img_w)
             cy_n = cy / float(img_h)
 
-            # Signal-to-Noise Ratio
-            obj_speed = np.sqrt(dx ** 2 + dy ** 2)
+            # SNR from mid-scale velocity
+            obj_speed = np.sqrt(dx_m ** 2 + dy_m ** 2)
             if bg_res_buffers is not None and len(bg_res_buffers[frame_0idx]) > 0:
                 bg_stack = np.array(list(bg_res_buffers[frame_0idx]))
                 bg_max = np.max(np.abs(bg_stack), axis=0)
@@ -254,9 +268,12 @@ def score_expression(
                 )
             else:
                 bg_magnitude = 0.0
-            snr = np.log(obj_speed / (bg_magnitude + 1e-6) + 1.0)
+            snr = obj_speed / (bg_magnitude + 1e-6)
 
-            spatial_motion = np.array([dx, dy, dw_s, dh_s, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32)
+            spatial_motion = np.array([
+                dx_s, dy_s, dx_m, dy_m, dx_l, dy_l,
+                dw_s, dh_s, cx_n, cy_n, w_n, h_n, snr,
+            ], dtype=np.float32)
 
             track_ids.append(tid)
             spatial_motions.append(spatial_motion)
@@ -348,7 +365,7 @@ def main():
     print(f"Device: {device}")
 
     # Load aligner
-    aligner = MotionLanguageAligner(motion_dim=9, lang_dim=384, embed_dim=256).to(device)
+    aligner = MotionLanguageAligner(motion_dim=13, lang_dim=384, embed_dim=256).to(device)
     checkpoint = torch.load(WEIGHTS_PATH, map_location=device)
     if isinstance(checkpoint, dict) and "model" in checkpoint:
         aligner.load_state_dict(checkpoint["model"])
