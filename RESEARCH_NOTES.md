@@ -270,6 +270,40 @@ Train a `MotionLanguageAligner` to match 2D velocity vectors with natural langua
 - **Analysis:** InfoNCE massively outperforms BCE across all expression types. Motion F1 jumps +9.4pp (0.6386→0.7328), appearance +12.4pp (0.4338→0.5578), stationary +4.5pp (0.6684→0.7134). The structured contrastive embedding space produces `gmc_score` distributions with much better separation between GT and non-GT tracks, giving the fusion head a far more informative signal to work with.
 - **Key insight:** The aligner's loss function matters enormously for downstream fusion quality. BCE learns pointwise scores; InfoNCE learns a metric space. The metric space representation transfers much better to the fusion head because relative score ordering is more consistent.
 
+### Exp 23: 9D Motion Vector with SNR + Fixed Temperature InfoNCE (`dab6048`)
+
+- **Motivation:** 8D motion vector `[dx, dy, dw, dh, cx, cy, w, h]` cannot distinguish real object motion from homography compensation noise. Stationary objects have non-zero residual velocity after ego-compensation. Also, professor advised removing FNM masking — just use standard InfoNCE with fixed temperature.
+- **Changes:**
+  1. `core.py`: `estimate_homography` now returns `(H, bg_residual)` tuple. bg_residual = median absolute warp error of RANSAC inliers (noise floor).
+  2. Added **SNR** (Signal-to-Noise Ratio) feature: `snr = obj_speed / (bg_magnitude + ε)`. Moving objects: SNR >> 1, stationary: SNR ≈ 1. 8D → 9D.
+  3. `losses.py`: Simplified to standard symmetric InfoNCE with fixed τ=0.07, no FNM.
+  4. Inference scoring: `sigmoid(cos_sim / τ)` to match training temperature scaling.
+  5. Checkpoint saves `{"model": state_dict, "temperature": τ}`.
+- **Ablations:**
+  - Learnable temperature collapsed to τ=0.0099 → all scores saturated to 1.0. Fixed τ=0.07 resolved this.
+  - log(SNR) performed worse (+0.231 vs +0.263) — log compressed discriminative extreme values.
+  - batch_size=1024 hurt (+0.254 vs +0.263) — too few unique negatives per batch with ~160 expression classes.
+- **Result:** Score separation on seq 0011 "moving cars": **+0.263** (GT avg 0.874, Non-GT avg 0.611)
+
+### Exp 24: 13D Multi-Scale Temporal Features + Motion-Only Training Filter (`5b39ed7`)
+
+- **Motivation:** (1) Single frame_gap=5 captures one timescale — a car "slowing down" looks identical to a car "at constant speed" in a snapshot. (2) Training on ALL expressions including appearance-only ones (e.g., "red cars") adds noise since motion vectors can't encode color/shape.
+- **Changes:**
+  1. **Motion-only training filter:** Skip non-motion expressions via `is_motion_expression()` keyword check. Reduced training set from 7598→3681 expressions. Model no longer wastes capacity on unlearnable appearance mappings.
+  2. **Multi-scale velocity:** Compute ego-compensated `(dx, dy)` at 3 time scales: short (gap=2), mid (gap=5), long (gap=10). Missing scales zero-filled. 9D → 13D: `[dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh, cx, cy, w, h, snr]`.
+  3. Manager: increased homography/centroid buffer to maxlen=11 (max_gap+1). Multi-scale velocity from warped centroid history.
+  4. MotionBuffer smooths full 8D kinematic vector (6 velocity components + dw + dh).
+- **Results (seq 0011, "moving cars" score separation):**
+
+| Config | GT avg | Non-GT avg | Separation |
+| --- | --- | --- | --- |
+| 9D baseline (Exp 23) | 0.874 | 0.611 | +0.263 |
+| + motion-only filter | 0.866 | 0.583 | +0.283 |
+| **+ multi-scale 13D** | **0.853** | **0.492** | **+0.362** |
+
+- **Analysis:** Motion-only filter dropped Non-GT by 0.036 (removing appearance noise). Multi-scale dropped Non-GT by another 0.091 — the model can now distinguish sustained motion from transient noise across time scales. Combined: +42% relative improvement over Exp 23.
+- **Training:** 807K samples, batch_size=512, 100 epochs, lr=1e-3 with cosine annealing. Loss: 3.56, Acc: 12.5%.
+
 ---
 
 ## Recommended Approach: InfoNCE Aligner + Learned Fusion Head
