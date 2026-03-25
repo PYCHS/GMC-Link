@@ -19,13 +19,13 @@ class MotionLanguageAligner(nn.Module):
     """
 
     def __init__(
-        self, motion_dim: int = 13, lang_dim: int = 768, embed_dim: int = 256
+        self, motion_dim: int = 13, lang_dim: int = 384, embed_dim: int = 256
     ) -> None:
         super().__init__()
-        # Motion Encoder: Project 13D multi-scale vector
-        # (dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh, cx, cy, w, h, snr)
+        # Motion Encoder: Project 13D residual velocity vector
+        # Residual velocity (raw - ego) at 3 scales (6D): dx, dy at short/mid/long
+        # Spatial (7D): dw, dh, cx, cy, w, h, snr
         # into a semantic vector.
-        # Wider MLP to learn nuanced motion semantics (e.g., turning vs moving forward)
         self.motion_projector = nn.Sequential(
             nn.Linear(motion_dim, 128),
             nn.ReLU(),
@@ -75,7 +75,7 @@ class MotionLanguageAligner(nn.Module):
         Compute cosine similarity scores between motion and language embeddings.
 
         Args:
-            motion_feats: (N, 8) motion vectors.
+            motion_feats: (N, motion_dim) motion vectors.
             lang_feats:   (M, L_dim) language embeddings.
 
         Returns:

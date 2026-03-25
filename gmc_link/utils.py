@@ -93,21 +93,30 @@ class MotionBuffer:
 
 class ScoreBuffer:
     """
-    Temporal smoothing for alignment scores to prevent flickering in visualization.
-    Uses EMA to stabilize per-track scores across frames.
+    Asymmetric temporal smoothing for alignment scores.
+
+    Fast rise (alpha_up) to quickly detect new motion, slow decay (alpha_down)
+    to maintain scores during brief stops. This handles the common case where
+    a "moving car" temporarily stops (e.g., at a red light) and should retain
+    a high score for several frames.
     """
 
     def __init__(self, alpha: float = 0.4) -> None:
         self.alpha: float = alpha
+        self.alpha_up: float = alpha  # fast response to new high scores
+        self.alpha_down: float = 0.1  # slow decay when score drops
         self.registry: Dict[int, float] = {}  # {track_id: smoothed_score}
 
     def smooth(self, track_id: int, raw_score: float) -> float:
-        """Apply EMA smoothing to a track's alignment score."""
+        """Apply asymmetric EMA: fast rise, slow decay."""
         if track_id not in self.registry:
             self.registry[track_id] = raw_score
             return raw_score
 
-        smoothed = self.alpha * raw_score + (1 - self.alpha) * self.registry[track_id]
+        old = self.registry[track_id]
+        # Use different alphas for rising vs falling scores
+        a = self.alpha_up if raw_score >= old else self.alpha_down
+        smoothed = a * raw_score + (1 - a) * old
         self.registry[track_id] = smoothed
         return smoothed
 

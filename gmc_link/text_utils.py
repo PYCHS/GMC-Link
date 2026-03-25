@@ -12,7 +12,7 @@ class TextEncoder:
     descriptions into a format that the GMC-Link model can understand.
     """
 
-    def __init__(self, model_name="all-MiniLM-L6-v2", device="mps"):
+    def __init__(self, model_name="all-MiniLM-L6-v2", device="cuda"):
         self.model = SentenceTransformer(model_name).to(device)
         self.device = device
 

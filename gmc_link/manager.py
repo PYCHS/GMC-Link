@@ -131,6 +131,17 @@ class GMCLinkManager:
             else:
                 self.prev_detections = None
 
+        # Pre-compute background noise floor (shared across all tracks)
+        if len(self.bg_residual_buffer) > 0:
+            bg_stack = np.array(list(self.bg_residual_buffer))
+            bg_max = np.max(np.abs(bg_stack), axis=0)
+            bg_magnitude = np.sqrt(
+                (bg_max[0] / float(img_w) * VELOCITY_SCALE) ** 2
+                + (bg_max[1] / float(img_h) * VELOCITY_SCALE) ** 2
+            )
+        else:
+            bg_magnitude = 0.0
+
         track_ids = []
         compensated_velocities = []
 
@@ -164,29 +175,28 @@ class GMCLinkManager:
             wh_hist = list(self.wh_history[tid])
 
             if len(centroid_hist) > 1:
-                # WARP ORIGINAL COORDINATES TO CURRENT FRAME (warp once!)
+                # PolarMOT-inspired ego-invariant decomposition
                 T = len(centroid_hist)
                 homographies = list(self.homography_buffer)[-T:]
-
-                # Ensure we have enough homographies
                 while len(homographies) < T:
                     homographies.insert(0, np.eye(3, dtype=np.float32))
 
-                # Warp ORIGINAL coordinates to current frame
-                world_frame_centroids = []
-                for centroid, H in zip(centroid_hist, homographies):
-                    warped = warp_points(np.array([centroid]), H)
-                    world_frame_centroids.append(warped[0])
-
-                # Multi-scale velocity: compute dx, dy at each gap
-                scale_velocities = []
+                # Multi-scale: residual velocity = raw - ego
+                residual_velocities = []
                 for gap in self.FRAME_GAPS:
                     if T > gap:
-                        v_raw = world_frame_centroids[-1] - world_frame_centroids[-(gap + 1)]
+                        # Raw velocity (normalized)
+                        v_raw = centroid_hist[-1] - centroid_hist[-(gap + 1)]
                         v_norm = normalize_velocity(v_raw, frame_shape)
-                        scale_velocities.append(v_norm)
+                        # Per-object ego displacement (normalized)
+                        old_c = centroid_hist[-(gap + 1)]
+                        H_old = homographies[T - 1 - gap]
+                        warped_old = warp_points(np.array([old_c]), H_old)[0]
+                        ego_v = normalize_velocity(warped_old - old_c, frame_shape)
+                        # Residual = raw - ego (object-only motion)
+                        residual_velocities.append(v_norm - ego_v)
                     else:
-                        scale_velocities.append(np.zeros(2, dtype=np.float32))
+                        residual_velocities.append(np.zeros(2, dtype=np.float32))
 
                 # dw, dh from mid-scale (index 1, gap=5) or full history
                 mid_gap = self.FRAME_GAPS[1]
@@ -197,11 +207,11 @@ class GMCLinkManager:
                 dw_raw = raw_dw_dh[0] / float(img_w) * VELOCITY_SCALE
                 dh_raw = raw_dw_dh[1] / float(img_h) * VELOCITY_SCALE
 
-                # Smooth the full 8D multi-scale kinematic vector
+                # Smooth the 8D residual velocity + dw/dh
                 full_raw_v = np.array([
-                    scale_velocities[0][0], scale_velocities[0][1],  # short
-                    scale_velocities[1][0], scale_velocities[1][1],  # mid
-                    scale_velocities[2][0], scale_velocities[2][1],  # long
+                    residual_velocities[0][0], residual_velocities[0][1],
+                    residual_velocities[1][0], residual_velocities[1][1],
+                    residual_velocities[2][0], residual_velocities[2][1],
                     dw_raw, dh_raw,
                 ], dtype=np.float32)
                 if update_state:
@@ -224,28 +234,19 @@ class GMCLinkManager:
                 dx_l, dy_l = 0.0, 0.0
                 dw, dh = 0.0, 0.0
 
-            # Build 13D Multi-Scale Spatial-Motion Vector
+            # Build 13D vector: residual velocity + spatial
             w_n = curr_w / float(img_w)
             h_n = curr_h / float(img_h)
             cx_n = curr_centroid[0] / float(img_w)
             cy_n = curr_centroid[1] / float(img_h)
 
-            # SNR from mid-scale velocity
+            # SNR from mid-scale residual speed (bg_magnitude pre-computed above)
             obj_speed = np.sqrt(dx_m ** 2 + dy_m ** 2)
-            if len(self.bg_residual_buffer) > 0:
-                bg_stack = np.array(list(self.bg_residual_buffer))
-                bg_max = np.max(np.abs(bg_stack), axis=0)
-                bg_magnitude = np.sqrt(
-                    (bg_max[0] / float(img_w) * VELOCITY_SCALE) ** 2
-                    + (bg_max[1] / float(img_h) * VELOCITY_SCALE) ** 2
-                )
-            else:
-                bg_magnitude = 0.0
             snr = obj_speed / (bg_magnitude + 1e-6)
 
             spatial_motion = np.array(
-                [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh,
-                 cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
+                [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l,
+                 dw, dh, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
             )
 
             track_ids.append(tid)
@@ -263,9 +264,12 @@ class GMCLinkManager:
             motion_emb, lang_emb = self.aligner.encode(
                 motion_tensor, language_embedding.to(self.device)
             )
-            # Cosine similarity scaled by learned temperature → sigmoid to [0, 1]
+            # Cosine similarity with margin calibration → sigmoid to [0, 1]
+            # Margin shifts the sigmoid reference point so that zero-similarity
+            # maps below 0.5, improving discrimination for stationary objects
             cosine_sim = torch.matmul(motion_emb, lang_emb.t()).flatten()
-            raw_scores = torch.sigmoid(cosine_sim / self.temperature).cpu().numpy()
+            margin = 0.05  # calibrated from GT/non-GT cosine distributions
+            raw_scores = torch.sigmoid((cosine_sim - margin) / self.temperature).cpu().numpy()
 
         # Apply score smoothing for temporal consistency
         scores_dict = {}

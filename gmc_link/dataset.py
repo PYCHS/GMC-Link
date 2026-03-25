@@ -43,7 +43,7 @@ class MotionLanguageDataset(Dataset):
 
 
 def collate_fn(batch):
-    """Stack into (Batch, 10) motion, (Batch, L_dim) language, and (Batch,) integer labels."""
+    """Stack into (Batch, 13) motion, (Batch, L_dim) language, and (Batch,) integer labels."""
     motion_batch = torch.stack([item[0] for item in batch], dim=0)
     language_batch = torch.stack([item[1] for item in batch], dim=0)
     label_batch = torch.stack([item[2] for item in batch], dim=0)
@@ -249,11 +249,13 @@ def _compute_velocity_at_gap(
     centroids, curr_fid, future_fid, frame_shape, seq, frame_dir, orb_engine
 ):
     """
-    Compute ego-motion-compensated (dx, dy) and bg_residual for a single frame pair.
-    Returns (dx, dy, bg_residual) or None if homography fails.
+    Compute residual velocity (raw - ego) for a frame pair.
+    Returns (res_dx, res_dy, bg_residual).
     """
     h, w = frame_shape
 
+    homography = None
+    bg_residual = np.zeros(2, dtype=np.float32)
     if frame_dir is not None and orb_engine is not None and seq is not None:
         cache_key = (seq, curr_fid, future_fid)
         if cache_key in HOMOGRAPHY_CACHE:
@@ -267,35 +269,31 @@ def _compute_velocity_at_gap(
                 homography, bg_residual = orb_engine.estimate_homography(
                     img_curr, img_future, prev_bboxes=None
                 )
-            else:
-                homography = None
-                bg_residual = np.zeros(2, dtype=np.float32)
             HOMOGRAPHY_CACHE[cache_key] = (homography, bg_residual)
 
-        cx1, cy1, _, _ = centroids[curr_fid]
-        cx2, cy2, _, _ = centroids[future_fid]
+    cx1, cy1, _, _ = centroids[curr_fid]
+    cx2, cy2, _, _ = centroids[future_fid]
 
-        # Synthetic jitter (+/- 2 pixels)
-        j_cx2 = cx2 + np.random.uniform(-2.0, 2.0)
-        j_cy2 = cy2 + np.random.uniform(-2.0, 2.0)
+    # Synthetic jitter (+/- 2 pixels)
+    j_cx2 = cx2 + np.random.uniform(-2.0, 2.0)
+    j_cy2 = cy2 + np.random.uniform(-2.0, 2.0)
 
-        if homography is not None:
-            pts = np.array([[cx1, cy1]], dtype=np.float32)
-            warped_pts = warp_points(pts, homography)
-            wcx1, wcy1 = warped_pts[0]
-            dx = (j_cx2 - wcx1) / w * VELOCITY_SCALE
-            dy = (j_cy2 - wcy1) / h * VELOCITY_SCALE
-            return dx, dy, bg_residual
-        else:
-            dx = (j_cx2 - cx1) / w * VELOCITY_SCALE
-            dy = (j_cy2 - cy1) / h * VELOCITY_SCALE
-            return dx, dy, np.zeros(2, dtype=np.float32)
-    else:
-        cx1, cy1, _, _ = centroids[curr_fid]
-        cx2, cy2, _, _ = centroids[future_fid]
-        dx = (cx2 - cx1) / w * VELOCITY_SCALE
-        dy = (cy2 - cy1) / h * VELOCITY_SCALE
-        return dx, dy, np.zeros(2, dtype=np.float32)
+    # Raw centroid difference (normalized)
+    raw_dx = (j_cx2 - cx1) / w * VELOCITY_SCALE
+    raw_dy = (j_cy2 - cy1) / h * VELOCITY_SCALE
+
+    # Per-object ego displacement (normalized)
+    ego_dx, ego_dy = 0.0, 0.0
+    if homography is not None:
+        warped = warp_points(np.array([[cx1, cy1]], dtype=np.float32), homography)[0]
+        ego_dx = (warped[0] - cx1) / w * VELOCITY_SCALE
+        ego_dy = (warped[1] - cy1) / h * VELOCITY_SCALE
+
+    # Residual = raw - ego (object-only motion)
+    res_dx = raw_dx - ego_dx
+    res_dy = raw_dy - ego_dy
+
+    return res_dx, res_dy, bg_residual
 
 
 def _generate_positive_pairs(
@@ -309,12 +307,10 @@ def _generate_positive_pairs(
     orb_engine: Any = None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[int]]:
     """
-    Generate positive (motion, language) pairs with multi-scale temporal velocities.
+    Generate positive (motion, language) pairs with residual velocity (raw - ego).
 
-    For each anchor frame, computes velocity at multiple time scales (short/mid/long).
-    Missing scales are zero-filled. A sample is generated if at least one scale is available.
-
-    13D vector: [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh, cx, cy, w, h, snr]
+    13D vector: [res_dx_s, res_dy_s, res_dx_m, res_dy_m, res_dx_l, res_dy_l,
+                 dw, dh, cx, cy, w, h, snr]
     """
     h, w = frame_shape
     motion_data = []
@@ -328,7 +324,7 @@ def _generate_positive_pairs(
         for i in range(len(sorted_frames)):
             curr_fid = sorted_frames[i]
 
-            # Find future frames at each scale
+            # Find future frames at each scale — warped velocity
             scale_velocities = []
             best_bg_residual = np.zeros(2, dtype=np.float32)
             any_valid = False
@@ -337,14 +333,12 @@ def _generate_positive_pairs(
                 future_j = _find_future_frame(sorted_frames, i, gap)
                 if future_j is not None:
                     future_fid = sorted_frames[future_j]
-                    result = _compute_velocity_at_gap(
+                    dx, dy, bg_res = _compute_velocity_at_gap(
                         centroids, curr_fid, future_fid, frame_shape,
                         seq, frame_dir, orb_engine,
                     )
-                    dx, dy, bg_res = result
                     scale_velocities.append((dx, dy))
                     any_valid = True
-                    # Use primary scale's bg_residual for SNR
                     if gap_idx == primary_gap_idx:
                         best_bg_residual = bg_res
                 else:
@@ -372,7 +366,7 @@ def _generate_positive_pairs(
             cx_n, cy_n = cx1 / w, cy1 / h
             bw_n, bh_n = bw1 / w, bh1 / h
 
-            # SNR from primary (mid) scale velocity
+            # SNR from primary (mid) scale warped speed
             mid_dx, mid_dy = scale_velocities[primary_gap_idx]
             obj_speed = np.sqrt(mid_dx ** 2 + mid_dy ** 2)
             bg_mag = np.sqrt(
@@ -381,11 +375,11 @@ def _generate_positive_pairs(
             )
             snr = obj_speed / (bg_mag + 1e-6)
 
-            # 13D: [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l, dw, dh, cx, cy, w, h, snr]
+            # 13D: warped velocity + spatial
             motion_vec = np.array([
-                scale_velocities[0][0], scale_velocities[0][1],  # short
-                scale_velocities[1][0], scale_velocities[1][1],  # mid
-                scale_velocities[2][0], scale_velocities[2][1],  # long
+                scale_velocities[0][0], scale_velocities[0][1],
+                scale_velocities[1][0], scale_velocities[1][1],
+                scale_velocities[2][0], scale_velocities[2][1],
                 dw, dh, cx_n, cy_n, bw_n, bh_n, snr,
             ], dtype=np.float32)
 
@@ -410,7 +404,7 @@ def build_training_data(
     to the same expression share that ID, so SupervisedInfoNCE treats them as
     positives and everything else as in-batch negatives.
 
-    Uses multi-scale frame gaps for temporal velocity features (13D vectors).
+    Uses multi-scale frame gaps for temporal velocity features (16D vectors with ego-motion).
     """
     if frame_gaps is None:
         frame_gaps = FRAME_GAPS

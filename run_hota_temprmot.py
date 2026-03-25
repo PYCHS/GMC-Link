@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from gmc_link.alignment import MotionLanguageAligner
 from gmc_link.core import ORBHomographyEngine
 from gmc_link.text_utils import TextEncoder
-from gmc_link.utils import normalize_velocity, MotionBuffer, ScoreBuffer, VELOCITY_SCALE
+from gmc_link.utils import normalize_velocity, MotionBuffer, ScoreBuffer, VELOCITY_SCALE, warp_points
 from gmc_link.demo_inference import classify_expression
 
 # ── Config ──────────────────────────────────────────────────────────────
@@ -203,16 +203,17 @@ def score_expression(
             ch = list(centroid_history[tid])
             wh = list(wh_history[tid])
 
-            from gmc_link.utils import warp_points
-
             if len(ch) > 1:
                 newest_f0, newest_c = ch[-1]
 
-                # Multi-scale velocity
-                scale_velocities = []
+                # Multi-scale: residual velocity = raw - ego
+                residual_velocities = []
                 for gap in MULTI_GAPS:
                     if len(ch) > gap:
                         old_f0, old_c = ch[-(gap + 1)]
+                        # Raw velocity
+                        raw_v = normalize_velocity(newest_c - old_c, frame_shape)
+                        # Per-object ego displacement
                         actual_gap = newest_f0 - old_f0
                         if actual_gap > 0 and actual_gap <= len(cum_H) - 1:
                             idx = len(cum_H) - 1 - actual_gap
@@ -220,10 +221,11 @@ def score_expression(
                         else:
                             H_old = np.eye(3, dtype=np.float32)
                         warped_old = warp_points(np.array([old_c]), H_old)[0]
-                        raw_v = newest_c - warped_old
-                        scale_velocities.append(normalize_velocity(raw_v, frame_shape))
+                        ego_v = normalize_velocity(warped_old - old_c, frame_shape)
+                        # Residual = raw - ego
+                        residual_velocities.append(raw_v - ego_v)
                     else:
-                        scale_velocities.append(np.zeros(2, dtype=np.float32))
+                        residual_velocities.append(np.zeros(2, dtype=np.float32))
 
                 # dw, dh from mid-scale
                 mid_gap = MULTI_GAPS[mid_gap_idx]
@@ -235,9 +237,9 @@ def score_expression(
                 dh_raw = raw_dw_dh[1] / float(img_h) * VELOCITY_SCALE
 
                 full_v = np.array([
-                    scale_velocities[0][0], scale_velocities[0][1],
-                    scale_velocities[1][0], scale_velocities[1][1],
-                    scale_velocities[2][0], scale_velocities[2][1],
+                    residual_velocities[0][0], residual_velocities[0][1],
+                    residual_velocities[1][0], residual_velocities[1][1],
+                    residual_velocities[2][0], residual_velocities[2][1],
                     dw_raw, dh_raw,
                 ], dtype=np.float32)
                 smoothed_v = motion_buffer.smooth(tid, full_v)
@@ -251,13 +253,13 @@ def score_expression(
                 dx_l, dy_l = 0.0, 0.0
                 dw_s, dh_s = 0.0, 0.0
 
-            # 13D spatial-motion vector
+            # 13D: residual velocity + spatial
             w_n = w / float(img_w)
             h_n = h / float(img_h)
             cx_n = cx / float(img_w)
             cy_n = cy / float(img_h)
 
-            # SNR from mid-scale velocity
+            # SNR from mid-scale residual speed
             obj_speed = np.sqrt(dx_m ** 2 + dy_m ** 2)
             if bg_res_buffers is not None and len(bg_res_buffers[frame_0idx]) > 0:
                 bg_stack = np.array(list(bg_res_buffers[frame_0idx]))
@@ -286,7 +288,8 @@ def score_expression(
         with torch.no_grad():
             motion_emb, l_emb = aligner.encode(motion_tensor, lang_emb.to(device))
             cosine_sim = torch.matmul(motion_emb, l_emb.t()).flatten()
-            raw_scores = torch.sigmoid(cosine_sim / temperature).cpu().numpy()
+            margin = 0.05  # calibrated from GT/non-GT cosine distributions
+            raw_scores = torch.sigmoid((cosine_sim - margin) / temperature).cpu().numpy()
 
         scores = {}
         for i, tid in enumerate(track_ids):
