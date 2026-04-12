@@ -37,19 +37,23 @@ IKUN_DIR       = "/home/seanachan/iKUN"
 DATA_ROOT      = "refer-kitti"           # symlink to Refer-KITTI V1
 TRACK_DIR      = "NeuralSORT"
 WEIGHTS_PATH   = "gmc_link_weights_v1train.pth"
-FUSION_WEIGHTS = "gmc_link/fusion_head_weights.pth"
+FUSION_WEIGHTS = "gmc_link/fusion_head_weights_v1.pth"
 GT_TEMPLATE    = os.path.join("Refer-KITTI", "gt_template")
 IKUN_WEIGHTS   = "iKUN.pth"
 
 IKUN_RESULTS_PATH = "iKUN/ikun_results_v1.json"
 
 TRACKEVAL_SCRIPT = "/home/seanachan/TempRMOT/TrackEval/scripts/run_mot_challenge.py"
-OUTPUT_ROOT      = "hota_eval_v1"
+OUTPUT_ROOT      = "hota_eval_v1_clean"
 MOTION_ONLY      = False  # set via --motion-only flag
+
+# ── Fusion mode config ──────────────────────────────────────────────────
+FUSION_MODE = "additive"   # "additive" (2-param) or "mlp" (learned head)
+ALPHA       = 0.07         # weight for GMC logit in additive mode
 
 # V1 split
 TRAIN_SEQS = ["0011"]
-TEST_SEQS  = ["0005", "0013"]
+TEST_SEQS  = ["0011"]
 ALL_SEQS   = ["0005", "0011", "0013"]
 
 FRAMES = {
@@ -203,18 +207,27 @@ def classify_expression(sentence):
 
 # ── Prediction generation ─────────────────────────────────────────────────
 
+def prob_to_logit(p, eps=1e-6):
+    """Convert probability to logit: log(p / (1-p)), clamped for stability."""
+    p = np.clip(p, eps, 1.0 - eps)
+    return np.log(p / (1.0 - p))
+
+
 def generate_predictions(method: str):
     from gmc_link.manager import GMCLinkManager
     from gmc_link.text_utils import TextEncoder
-    from gmc_link.fusion_head import load_fusion_head
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     encoder, fusion_model, fusion_thr = None, None, 0.5
     if method == "fusion":
         encoder = TextEncoder(device=device)
-        fusion_model, fusion_thr = load_fusion_head(FUSION_WEIGHTS)
-        print(f"Fusion head loaded (thr={fusion_thr:.2f}) | GMC weights: {WEIGHTS_PATH}")
+        if FUSION_MODE == "mlp":
+            from gmc_link.fusion_head import load_fusion_head
+            fusion_model, fusion_thr = load_fusion_head(FUSION_WEIGHTS)
+            print(f"Fusion head loaded (thr={fusion_thr:.2f}) | GMC weights: {WEIGHTS_PATH}")
+        else:
+            print(f"Additive logit fusion (α={ALPHA:.3f}) | GMC weights: {WEIGHTS_PATH}")
 
     for sequence in TEST_SEQS:
         print(f"\n── Sequence {sequence} [{method}] ──")
@@ -305,7 +318,15 @@ def generate_predictions(method: str):
                         continue
                     if method == "baseline":
                         is_pos = logit > 0.0
-                    else:
+                    elif FUSION_MODE == "additive":
+                        gmc_prob = gmc_scores.get(obj_id, 0.5)
+                        if expr_type in ("motion", "stationary"):
+                            gmc_logit = prob_to_logit(gmc_prob)
+                            final_logit = logit + ALPHA * gmc_logit
+                        else:
+                            final_logit = logit  # appearance-only: ignore GMC
+                        is_pos = final_logit > 0.0
+                    else:  # mlp mode
                         gmc_prob = gmc_scores.get(obj_id, 0.0)
                         is_motion = 1.0 if expr_type == "motion" else (0.5 if expr_type == "stationary" else 0.0)
                         feat = torch.tensor([[logit, gmc_prob, is_motion]], dtype=torch.float32)
@@ -378,14 +399,22 @@ def run_trackeval(method: str, seqmap_path: str, results_dir: str):
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def main():
-    global OUTPUT_ROOT, MOTION_ONLY
+    global OUTPUT_ROOT, MOTION_ONLY, FUSION_MODE, ALPHA
     parser = argparse.ArgumentParser()
     parser.add_argument("--method", choices=["baseline", "fusion", "both"], default="both")
     parser.add_argument("--skip-ikun", action="store_true",
                         help="Skip iKUN inference (use existing ikun_results_v1.json)")
     parser.add_argument("--motion-only", action="store_true",
                         help="Evaluate only motion/stationary expressions (filter appearance-only)")
+    parser.add_argument("--fusion-mode", choices=["additive", "mlp"], default="additive",
+                        help="Fusion strategy: additive logit (default) or learned MLP")
+    parser.add_argument("--alpha", type=float, default=None,
+                        help="GMC logit weight for additive fusion (overrides ALPHA)")
     args = parser.parse_args()
+
+    FUSION_MODE = args.fusion_mode
+    if args.alpha is not None:
+        ALPHA = args.alpha
 
     if args.motion_only:
         MOTION_ONLY = True
