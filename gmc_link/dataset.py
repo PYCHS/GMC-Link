@@ -179,8 +179,8 @@ def _collect_expressions(
 
             sentence_set.add(sentence)
 
-    # Step 2: Create list of unique sentences
-    all_sentences = list(sentence_set)
+    # Step 2: Create a deterministic list of unique sentences
+    all_sentences = sorted(sentence_set)
     print(f"Unique sentences: {len(all_sentences)}")
 
     # Step 3: Batch encode all sentences
