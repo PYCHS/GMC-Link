@@ -226,6 +226,10 @@ final_eval.txt
 test_mtime.txt
 /hota_eval*/
 /iKUN_baseline_results/
+/iKUN_motion*/
 
 # Generated data
 *.npz
+
+# TensorBoard
+events.out.tfevents.*
