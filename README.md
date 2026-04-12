@@ -23,9 +23,9 @@ It bridges the gap between **object motion** (geometry) and **language** (semant
 ## Architecture & Pipeline
 
 ```text
-Video Frame ──► GMC (Homography) ──►Motion Feature Extraction(13D) ──► MLP Aligner (InfoNCE)──►Fusion with Tracker Score──► Final Association
-                                                                   ▲
-Natural Language Prompt ──► SentenceTransformer Embedding ─────────┘
+Video Frame ──► GMC (Homography) ──► Motion Feature Extraction (13D) ──► MLP Aligner (InfoNCE) ──► Fusion with Tracker Score ──► Final Association
+                                                                      ▲
+Natural Language Prompt ──► SentenceTransformer Embedding ────────────┘
 ```
 
 > We're training a Neural Network that can align the textual embeddings and motion embeddings together, and give a score of their alignment.
