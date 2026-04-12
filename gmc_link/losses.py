@@ -1,28 +1,43 @@
 """
 Loss functions for the GMC-Link alignment network.
 """
+import torch
 from torch import nn
+import torch.nn.functional as F
+
 
 class AlignmentLoss(nn.Module):
     """
-    Binary cross-entropy loss for motion-language alignment.
+    Symmetric InfoNCE loss with fixed temperature.
 
-    For each (motion, language) pair, the model predicts a scalar similarity
-    score. Positive pairs (correct match) should score high, negative pairs
-    (wrong sentence) should score low.
-
-    This replaces the CLIP-style contrastive loss which breaks down when
-    many samples share the same sentence.
+    Standard CLIP-style cross-modal contrastive loss:
+      L = CE(sim / τ, targets)  where targets = [0, 1, ..., B-1] (diagonal)
+    Applied symmetrically: motion→language + language→motion.
     """
 
-    def __init__(self):
+    def __init__(self, temperature: float = 0.07):
         super().__init__()
-        self.loss_fn = nn.BCEWithLogitsLoss()
+        self.temperature = temperature
 
-    def forward(self, scores, labels):
+    def forward(self, sim_matrix, sentence_ids=None):
         """
         Args:
-            scores: (N,) similarity scores from the aligner
-            labels: (N,) binary labels (1.0 = positive match, 0.0 = negative)
+            sim_matrix:   (B, B) cosine similarity matrix from model.forward()
+            sentence_ids: unused, kept for API compatibility
+
+        Returns:
+            Scalar loss (mean of motion→language and language→motion directions)
         """
-        return self.loss_fn(scores, labels)
+        B = sim_matrix.size(0)
+        device = sim_matrix.device
+
+        logits = sim_matrix / self.temperature
+
+        # Targets: diagonal pairs are positives
+        targets = torch.arange(B, device=device)
+
+        # Symmetric cross-entropy
+        m2l_loss = F.cross_entropy(logits, targets)
+        l2m_loss = F.cross_entropy(logits.t(), targets)
+
+        return (m2l_loss + l2m_loss) / 2.0

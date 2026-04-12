@@ -32,12 +32,15 @@ class GMCLinkManager:
     This provides better numerical stability and debugging capabilities.
     """
 
+    # Multi-scale frame gaps matching training
+    FRAME_GAPS = [2, 5, 10]  # short, mid, long
+
     def __init__(
         self,
         weights_path: str = None,
         device: str = "cpu",
         lang_dim: int = 384,
-        frame_gap: int = 5,
+        frame_gap: int = 10,  # max gap for buffer sizing
     ) -> None:
         self.device = device
         self.frame_gap = frame_gap
@@ -45,11 +48,17 @@ class GMCLinkManager:
         self.motion_buffer = MotionBuffer(alpha=0.3)
         self.score_buffer = ScoreBuffer(alpha=0.4)
         self.aligner = MotionLanguageAligner(
-            motion_dim=8, lang_dim=lang_dim, embed_dim=256
+            motion_dim=13, lang_dim=lang_dim, embed_dim=256
         ).to(device)
 
+        self.temperature = 1.0  # default (no scaling)
         if weights_path:
-            self.aligner.load_state_dict(torch.load(weights_path, map_location=device))
+            checkpoint = torch.load(weights_path, map_location=device)
+            if isinstance(checkpoint, dict) and "model" in checkpoint:
+                self.aligner.load_state_dict(checkpoint["model"])
+                self.temperature = checkpoint.get("temperature", 1.0)
+            else:
+                self.aligner.load_state_dict(checkpoint)
         self.aligner.eval()
 
         self.ego_engine = ORBHomographyEngine(max_features=1500)
@@ -59,9 +68,12 @@ class GMCLinkManager:
         # CUMULATIVE HOMOGRAPHY: Store original coordinates (never warped)
         self.centroid_history: Dict[int, deque] = {}
         self.wh_history: Dict[int, deque] = {}
-        
+
         # Store cumulative homographies: H[i] warps frame[t-i] -> current frame
         self.homography_buffer: deque = deque(maxlen=frame_gap + 1)
+
+        # Background residual buffer for noise floor estimation
+        self.bg_residual_buffer: deque = deque(maxlen=frame_gap + 1)
 
     def process_frame(
         self,
@@ -91,11 +103,12 @@ class GMCLinkManager:
         # CUMULATIVE HOMOGRAPHY UPDATE
         if update_state:
             if self.prev_frame is not None:
-                # Estimate H_{t-1 -> t}
-                H_prev_to_curr = self.ego_engine.estimate_homography(
+                # Estimate H_{t-1 -> t} and background warp residual
+                H_prev_to_curr, bg_residual = self.ego_engine.estimate_homography(
                     self.prev_frame, frame, self.prev_detections
                 )
-                
+                self.bg_residual_buffer.append(bg_residual)
+
                 # Update ALL cumulative homographies by composing with new homography
                 updated_homographies = deque(maxlen=self.frame_gap + 1)
                 for H_old in self.homography_buffer:
@@ -117,6 +130,17 @@ class GMCLinkManager:
                 self.prev_detections = [tuple(d) for d in detections]
             else:
                 self.prev_detections = None
+
+        # Pre-compute background noise floor (shared across all tracks)
+        if len(self.bg_residual_buffer) > 0:
+            bg_stack = np.array(list(self.bg_residual_buffer))
+            bg_max = np.max(np.abs(bg_stack), axis=0)
+            bg_magnitude = np.sqrt(
+                (bg_max[0] / float(img_w) * VELOCITY_SCALE) ** 2
+                + (bg_max[1] / float(img_h) * VELOCITY_SCALE) ** 2
+            )
+        else:
+            bg_magnitude = 0.0
 
         track_ids = []
         compensated_velocities = []
@@ -151,37 +175,45 @@ class GMCLinkManager:
             wh_hist = list(self.wh_history[tid])
 
             if len(centroid_hist) > 1:
-                # WARP ORIGINAL COORDINATES TO CURRENT FRAME (warp once!)
+                # PolarMOT-inspired ego-invariant decomposition
                 T = len(centroid_hist)
                 homographies = list(self.homography_buffer)[-T:]
-                
-                # Ensure we have enough homographies
                 while len(homographies) < T:
                     homographies.insert(0, np.eye(3, dtype=np.float32))
-                
-                # Warp ORIGINAL coordinates to current frame
-                world_frame_centroids = []
-                for centroid, H in zip(centroid_hist, homographies):
-                    warped = warp_points(np.array([centroid]), H)
-                    world_frame_centroids.append(warped[0])
-                
-                # Compute velocity from world-frame coordinates
-                world_frame_first = world_frame_centroids[0]
-                world_frame_last = world_frame_centroids[-1]
-                
-                raw_velocity = world_frame_last - world_frame_first
-                norm_velocity = normalize_velocity(raw_velocity, frame_shape)
 
-                # Z-axis depth scaling velocity (dw, dh)
-                raw_dw_dh = wh_hist[-1] - wh_hist[0]
+                # Multi-scale: residual velocity = raw - ego
+                residual_velocities = []
+                for gap in self.FRAME_GAPS:
+                    if T > gap:
+                        # Raw velocity (normalized)
+                        v_raw = centroid_hist[-1] - centroid_hist[-(gap + 1)]
+                        v_norm = normalize_velocity(v_raw, frame_shape)
+                        # Per-object ego displacement (normalized)
+                        old_c = centroid_hist[-(gap + 1)]
+                        H_old = homographies[T - 1 - gap]
+                        warped_old = warp_points(np.array([old_c]), H_old)[0]
+                        ego_v = normalize_velocity(warped_old - old_c, frame_shape)
+                        # Residual = raw - ego (object-only motion)
+                        residual_velocities.append(v_norm - ego_v)
+                    else:
+                        residual_velocities.append(np.zeros(2, dtype=np.float32))
+
+                # dw, dh from mid-scale (index 1, gap=5) or full history
+                mid_gap = self.FRAME_GAPS[1]
+                if T > mid_gap:
+                    raw_dw_dh = wh_hist[-1] - wh_hist[-(mid_gap + 1)]
+                else:
+                    raw_dw_dh = wh_hist[-1] - wh_hist[0]
                 dw_raw = raw_dw_dh[0] / float(img_w) * VELOCITY_SCALE
                 dh_raw = raw_dw_dh[1] / float(img_h) * VELOCITY_SCALE
 
-                # Smooth the FULL 4D kinematic vector to absorb YOLO jitter
-                full_raw_v = np.array(
-                    [norm_velocity[0], norm_velocity[1], dw_raw, dh_raw],
-                    dtype=np.float32,
-                )
+                # Smooth the 8D residual velocity + dw/dh
+                full_raw_v = np.array([
+                    residual_velocities[0][0], residual_velocities[0][1],
+                    residual_velocities[1][0], residual_velocities[1][1],
+                    residual_velocities[2][0], residual_velocities[2][1],
+                    dw_raw, dh_raw,
+                ], dtype=np.float32)
                 if update_state:
                     smoothed_v = self.motion_buffer.smooth(tid, full_raw_v)
                 else:
@@ -190,25 +222,31 @@ class GMCLinkManager:
                         smoothed_v = (alpha * full_raw_v) + ((1 - alpha) * self.motion_buffer.registry[tid])
                     else:
                         smoothed_v = full_raw_v
-                dx, dy, dw, dh = (
-                    smoothed_v[0],
-                    smoothed_v[1],
-                    smoothed_v[2],
-                    smoothed_v[3],
-                )
+                dx_s, dy_s = smoothed_v[0], smoothed_v[1]
+                dx_m, dy_m = smoothed_v[2], smoothed_v[3]
+                dx_l, dy_l = smoothed_v[4], smoothed_v[5]
+                dw, dh = smoothed_v[6], smoothed_v[7]
             else:
                 # First appearance: zero velocity
-                smoothed_v = np.zeros(4, dtype=np.float32)
-                dx, dy, dw, dh = 0.0, 0.0, 0.0, 0.0
+                smoothed_v = np.zeros(8, dtype=np.float32)
+                dx_s, dy_s = 0.0, 0.0
+                dx_m, dy_m = 0.0, 0.0
+                dx_l, dy_l = 0.0, 0.0
+                dw, dh = 0.0, 0.0
 
-            # Build 8D Spatial-Motion Vector
+            # Build 13D vector: residual velocity + spatial
             w_n = curr_w / float(img_w)
             h_n = curr_h / float(img_h)
             cx_n = curr_centroid[0] / float(img_w)
             cy_n = curr_centroid[1] / float(img_h)
 
+            # SNR from mid-scale residual speed (bg_magnitude pre-computed above)
+            obj_speed = np.sqrt(dx_m ** 2 + dy_m ** 2)
+            snr = obj_speed / (bg_magnitude + 1e-6)
+
             spatial_motion = np.array(
-                [dx, dy, dw, dh, cx_n, cy_n, w_n, h_n], dtype=np.float32
+                [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l,
+                 dw, dh, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
             )
 
             track_ids.append(tid)
@@ -217,15 +255,21 @@ class GMCLinkManager:
         if not compensated_velocities:
             return {}, {}
 
-        # Align motion with language
+        # Align motion with language via cosine similarity
         motion_tensor = torch.tensor(
             np.array(compensated_velocities), dtype=torch.float32
         ).to(self.device)
 
         with torch.no_grad():
-            logits = self.aligner(motion_tensor, language_embedding.to(self.device))
-
-        raw_scores = torch.sigmoid(logits).cpu().numpy().flatten()
+            motion_emb, lang_emb = self.aligner.encode(
+                motion_tensor, language_embedding.to(self.device)
+            )
+            # Cosine similarity with margin calibration → sigmoid to [0, 1]
+            # Margin shifts the sigmoid reference point so that zero-similarity
+            # maps below 0.5, improving discrimination for stationary objects
+            cosine_sim = torch.matmul(motion_emb, lang_emb.t()).flatten()
+            margin = 0.05  # calibrated from GT/non-GT cosine distributions
+            raw_scores = torch.sigmoid((cosine_sim - margin) / self.temperature).cpu().numpy()
 
         # Apply score smoothing for temporal consistency
         scores_dict = {}

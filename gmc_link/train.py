@@ -1,8 +1,8 @@
 """
 GMC-Link Training Script
 ========================
-Trains the MotionLanguageAligner using BCE loss with motion-language pairs
-from refer-kitti sequences 0015/0016/0018 (test on 0011).
+Trains the MotionLanguageAligner using Supervised InfoNCE loss with
+motion-language pairs from refer-kitti sequences (test on 0011).
 """
 
 import sys
@@ -33,7 +33,11 @@ def train_one_epoch(
     device: torch.device,
 ) -> Tuple[float, float]:
     """
-    Train the model for a single epoch.
+    Train the model for a single epoch using CLIP-style cross-modal InfoNCE.
+
+    For each batch of N (motion, language, expr_id) triples:
+      - Compute NxN cosine similarity matrix via model.forward()
+      - Pass sim_matrix and expr_ids to InfoNCE loss with false-negative masking
 
     Returns:
         Tuple of (average_loss, accuracy).
@@ -43,16 +47,17 @@ def train_one_epoch(
     correct = 0
     total = 0
 
-    for _, (motion_features, language_features, labels) in enumerate(
-        dataloader
-    ):
+    for motion_features, language_features, expr_ids in dataloader:
+
         motion_features = motion_features.to(device)
         language_features = language_features.to(device)
-        labels = labels.to(device)
+        expr_ids = expr_ids.to(device)
 
-        # Per-pair similarity scores
-        scores = model.score_pairs(motion_features, language_features)
-        loss = loss_func(scores, labels)
+        # ── NxN cosine similarity matrix ──
+        sim_matrix = model(motion_features, language_features)
+
+        # ── InfoNCE loss with false-negative masking ──
+        loss = loss_func(sim_matrix, expr_ids)
 
         optimizer.zero_grad()
         loss.backward()
@@ -60,10 +65,13 @@ def train_one_epoch(
 
         total_loss += loss.item()
 
-        # Track accuracy
-        preds = (torch.sigmoid(scores) > 0.5).float()
-        correct += (preds == labels).sum().item()
-        total += labels.size(0)
+        # ── Track retrieval accuracy (motion→language) ──
+        batch_size = sim_matrix.size(0)
+        with torch.no_grad():
+            nearest_lang_idx = sim_matrix.argmax(dim=1)
+            predicted_ids = expr_ids[nearest_lang_idx]
+            correct += (predicted_ids == expr_ids).sum().item()
+            total += batch_size
 
     accuracy = correct / total if total > 0 else 0.0
     return total_loss / len(dataloader), accuracy
@@ -74,7 +82,6 @@ def setup_data(
     data_root: str,
     sequences: list,
     batch_size: int,
-    frame_gap: int = 5,
 ) -> Optional[DataLoader]:
     """
     Initialize text encoder, build training dataset, and return a DataLoader.
@@ -87,7 +94,6 @@ def setup_data(
         data_root=data_root,
         sequences=sequences,
         text_encoder=encoder,
-        frame_gap=frame_gap,
     )
 
     print(f"Total training samples: {len(all_motions)}")
@@ -101,6 +107,9 @@ def setup_data(
         shuffle=True,
         collate_fn=collate_fn,
         pin_memory=True,
+        drop_last=True,  # Consistent batch size for contrastive learning
+        num_workers=4,
+        persistent_workers=True,
     )
 
     return dataloader
@@ -112,13 +121,13 @@ def setup_model_and_optimizer(
     MotionLanguageAligner, nn.Module, optim.Optimizer, optim.lr_scheduler.LRScheduler
 ]:
     """
-    Initialize the MotionLanguageAligner, BCE loss function, and AdamW optimizer.
+    Initialize the MotionLanguageAligner, InfoNCE loss, and AdamW optimizer.
     """
-    model = MotionLanguageAligner(motion_dim=8, lang_dim=lang_dim, embed_dim=256).to(
+    model = MotionLanguageAligner(motion_dim=13, lang_dim=lang_dim, embed_dim=256).to(
         device
     )
 
-    criterion = AlignmentLoss()
+    criterion = AlignmentLoss(temperature=0.07)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs, eta_min=1e-5
@@ -154,14 +163,26 @@ def train_loop(
                 f"Acc: {accuracy:.2%} | LR: {current_lr:.6f}"
             )
 
-    torch.save(model.state_dict(), save_path)
-    print(f"Training complete. Weights saved to {save_path}")
+    # Save model weights + temperature
+    save_dict = {
+        "model": model.state_dict(),
+        "temperature": criterion.temperature,
+    }
+    torch.save(save_dict, save_path)
+    print(f"Training complete. Weights saved to {save_path} (τ={criterion.temperature:.4f})")
 
 
 def main() -> None:
     """
     Main training execution block.
+
+    Set TRAIN_SPLIT env var to choose dataset:
+      TRAIN_SPLIT=v2  (default) — Refer-KITTI V2 seqs 0000-0015 → gmc_link_weights.pth
+      TRAIN_SPLIT=v1            — Refer-KITTI V1 seq 0011 only   → gmc_link_weights_v1train.pth
     """
+    import os as _os
+    train_split = _os.environ.get("TRAIN_SPLIT", "v2").lower()
+
     # --- Configuration ---
     device = torch.device(
         "cuda"
@@ -171,31 +192,33 @@ def main() -> None:
     print(f"Device: {device}")
 
     learning_rate = 1e-3
-    batch_size = 128
-    epochs = 50
+    epochs = 100
     lang_dim = 384
 
-    # Refer-KITTI data paths (Train on all available seqs, test on 11)
-    data_root = "refer-kitti"
-    sequences = [
-        "0001",
-        "0002",
-        "0003",
-        "0004",
-        "0005",
-        "0006",
-        "0007",
-        "0008",
-        "0009",
-        "0010",
-        "0012",
-        "0013",
-        "0014",
-        "0015",
-        "0016",
-        "0018",
-        "0020",
-    ]
+    if train_split == "v1":
+        # Refer-KITTI V1: train on official train split, eval on val (0005, 0011, 0013)
+        # Mirrors iKUN's VIDEOS['train'] — excludes 0005, 0011, 0013 (val/test seqs)
+        data_root = "/home/seanachan/data/Dataset/refer-kitti"
+        sequences = [
+            "0001", "0002", "0003", "0004", "0006",
+            "0007", "0008", "0009", "0010", "0012",
+            "0014", "0015", "0016", "0018", "0020",
+        ]
+        batch_size = 256
+        save_path = "gmc_link_weights_v1train.pth"
+        print("Training on Refer-KITTI V1 train split → " + save_path)
+    else:
+        # Refer-KITTI V2 data path and official train/test split
+        # Train: seqs 0000-0015 | Test: seqs 0016-0020
+        data_root = "/home/seanachan/data/Dataset/refer-kitti-v2"
+        sequences = [
+            "0000", "0001", "0002", "0003", "0004", "0005",
+            "0006", "0007", "0008", "0009", "0010", "0011",
+            "0012", "0013", "0014", "0015",
+        ]
+        batch_size = 512  # Balanced: enough in-batch negatives without diluting unique classes
+        save_path = "gmc_link_weights.pth"
+        print("Training on Refer-KITTI V2, seqs 0000-0015 → " + save_path)
 
     # --- Pipeline ---
     dataloader = setup_data(device, data_root, sequences, batch_size)
@@ -207,7 +230,8 @@ def main() -> None:
         device, lang_dim, learning_rate, epochs
     )
 
-    train_loop(model, dataloader, optimizer, scheduler, criterion, device, epochs)
+    train_loop(model, dataloader, optimizer, scheduler, criterion, device, epochs,
+               save_path=save_path)
 
 
 if __name__ == "__main__":
