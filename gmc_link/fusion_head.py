@@ -163,7 +163,7 @@ def collect_training_data(
                     if detections else None
                 )
 
-                gmc_scores, _ = linker.process_frame(
+                gmc_scores, _, _ = linker.process_frame(
                     frame_img, active_tracks, lang_emb, detections=det_array
                 )
 

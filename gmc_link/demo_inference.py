@@ -341,7 +341,7 @@ def run_comparison(
         )
 
         # Run GMC-Link on this frame
-        gmc_scores, _ = linker.process_frame(
+        gmc_scores, _, _ = linker.process_frame(
             frame_img, active_tracks, language_embedding, detections=det_array
         )
 

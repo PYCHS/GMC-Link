@@ -82,7 +82,7 @@ class GMCLinkManager:
         language_embedding: torch.Tensor,
         detections: Optional[np.ndarray] = None,
         update_state: bool = True,
-    ) -> Tuple[Dict[int, float], Dict[int, np.ndarray]]:
+    ) -> Tuple[Dict[int, float], Dict[int, np.ndarray], Dict[int, float]]:
         """
         Process a frame: compute centroid-difference velocities per tracked object,
         and return alignment scores against a language prompt.
@@ -95,7 +95,7 @@ class GMCLinkManager:
             update_state: Whether to update internal state (for multiple evaluations per frame)
         """
         if not active_tracks:
-            return {}, {}
+            return {}, {}, {}
 
         img_h, img_w = frame.shape[:2]
         frame_shape = (img_h, img_w)
@@ -253,7 +253,7 @@ class GMCLinkManager:
             compensated_velocities.append(spatial_motion)
 
         if not compensated_velocities:
-            return {}, {}
+            return {}, {}, {}
 
         # Align motion with language via cosine similarity
         motion_tensor = torch.tensor(
@@ -268,12 +268,14 @@ class GMCLinkManager:
             # Margin shifts the sigmoid reference point so that zero-similarity
             # maps below 0.5, improving discrimination for stationary objects
             cosine_sim = torch.matmul(motion_emb, lang_emb.t()).flatten()
+            cosine_sim_np = cosine_sim.cpu().numpy()
             margin = 0.05  # calibrated from GT/non-GT cosine distributions
             raw_scores = torch.sigmoid((cosine_sim - margin) / self.temperature).cpu().numpy()
 
         # Apply score smoothing for temporal consistency
         scores_dict = {}
         velocities_dict = {}
+        cosine_dict = {}
         for i, tid in enumerate(track_ids):
             if update_state:
                 smoothed_score = self.score_buffer.smooth(tid, float(raw_scores[i]))
@@ -285,6 +287,7 @@ class GMCLinkManager:
                     smoothed_score = float(raw_scores[i])
             scores_dict[tid] = smoothed_score
             velocities_dict[tid] = compensated_velocities[i]
+            cosine_dict[tid] = float(cosine_sim_np[i])
 
         if update_state:
             # Clean up dead tracks
@@ -297,4 +300,4 @@ class GMCLinkManager:
                 if d in self.wh_history:
                     del self.wh_history[d]
 
-        return scores_dict, velocities_dict
+        return scores_dict, velocities_dict, cosine_dict

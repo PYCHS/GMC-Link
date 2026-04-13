@@ -207,12 +207,6 @@ def classify_expression(sentence):
 
 # ── Prediction generation ─────────────────────────────────────────────────
 
-def prob_to_logit(p, eps=1e-6):
-    """Convert probability to logit: log(p / (1-p)), clamped for stability."""
-    p = np.clip(p, eps, 1.0 - eps)
-    return np.log(p / (1.0 - p))
-
-
 def generate_predictions(method: str):
     from gmc_link.manager import GMCLinkManager
     from gmc_link.text_utils import TextEncoder
@@ -296,6 +290,7 @@ def generate_predictions(method: str):
                 detections = ns_tracks[frame_1idx]
 
                 gmc_scores = {}
+                gmc_cosines = {}
                 if method == "fusion" and linker is not None:
                     frame_img = cv2.imread(os.path.join(frame_dir, fname))
                     if frame_img is not None:
@@ -307,8 +302,8 @@ def generate_predictions(method: str):
                         active = [_T(o, x, y, w, h) for o, x, y, w, h in detections]
                         det_arr = np.array([[x,y,x+w,y+h] for _,x,y,w,h in detections]) if detections else None
                         try:
-                            gmc_scores, _ = linker.process_frame(frame_img, active, lang_emb,
-                                                                  detections=det_arr)
+                            gmc_scores, _, gmc_cosines = linker.process_frame(
+                                frame_img, active, lang_emb, detections=det_arr)
                         except Exception:
                             pass
 
@@ -319,13 +314,12 @@ def generate_predictions(method: str):
                     if method == "baseline":
                         is_pos = logit > 0.0
                     elif FUSION_MODE == "additive":
-                        gmc_prob = gmc_scores.get(obj_id, 0.5)
+                        gmc_cos = gmc_cosines.get(obj_id, 0.0)
                         if expr_type in ("motion", "stationary"):
-                            gmc_logit = prob_to_logit(gmc_prob)
-                            final_logit = logit + ALPHA * gmc_logit
+                            final_score = logit + ALPHA * gmc_cos
                         else:
-                            final_logit = logit  # appearance-only: ignore GMC
-                        is_pos = final_logit > 0.0
+                            final_score = logit  # appearance-only: ignore GMC
+                        is_pos = final_score > 0.0
                     else:  # mlp mode
                         gmc_prob = gmc_scores.get(obj_id, 0.0)
                         is_motion = 1.0 if expr_type == "motion" else (0.5 if expr_type == "stationary" else 0.0)
