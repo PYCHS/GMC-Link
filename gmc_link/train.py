@@ -85,16 +85,15 @@ def setup_data(
     data_root: str,
     sequences: list,
     batch_size: int,
-) -> Tuple[Optional[DataLoader], Optional[dict]]:
+) -> Optional[DataLoader]:
     """
-    Initialize text encoder, build training dataset, and return a DataLoader
-    plus feature normalization statistics.
+    Initialize text encoder, build training dataset, and return a DataLoader.
     """
     print("Loading text encoder...")
     encoder = TextEncoder(device=str(device))
 
     print("Building training data...")
-    all_motions, all_languages, all_labels, feature_stats = build_training_data(
+    all_motions, all_languages, all_labels = build_training_data(
         data_root=data_root,
         sequences=sequences,
         text_encoder=encoder,
@@ -102,7 +101,7 @@ def setup_data(
 
     print(f"Total training samples: {len(all_motions)}")
     if len(all_motions) == 0:
-        return None, None
+        return None
 
     dataset = MotionLanguageDataset(all_motions, all_languages, all_labels)
     dataloader = DataLoader(
@@ -116,7 +115,7 @@ def setup_data(
         persistent_workers=True,
     )
 
-    return dataloader, feature_stats
+    return dataloader
 
 
 def setup_model_and_optimizer(
@@ -186,7 +185,6 @@ def train_loop(
     device: torch.device,
     epochs: int,
     save_path: str = "gmc_link_weights.pth",
-    feature_stats: dict = None,
 ) -> None:
     """
     Execute the main training loop across all epochs and save the final weights.
@@ -213,13 +211,11 @@ def train_loop(
                 f"Acc: {accuracy:.2%} | LR: {current_lr:.6f}"
             )
 
-    # Save model weights + temperature + feature normalization stats
+    # Save model weights + temperature
     save_dict = {
         "model": model.state_dict(),
         "temperature": criterion.temperature,
     }
-    if feature_stats is not None:
-        save_dict["feature_stats"] = feature_stats
     torch.save(save_dict, save_path)
     print(f"Training complete. Weights saved to {save_path} (τ={criterion.temperature:.4f})")
 
@@ -289,7 +285,7 @@ def main() -> None:
     print(f"  data_root={data_root}  batch_size={batch_size}  epochs={args.epochs}  lr={args.lr}")
 
     # --- Pipeline ---
-    dataloader, feature_stats = setup_data(device, data_root, sequences, batch_size)
+    dataloader = setup_data(device, data_root, sequences, batch_size)
     if dataloader is None:
         print("ERROR: No training data found.")
         return
@@ -299,7 +295,7 @@ def main() -> None:
     )
 
     train_loop(model, dataloader, optimizer, scheduler, criterion, device, args.epochs,
-               save_path=save_path, feature_stats=feature_stats)
+               save_path=save_path)
 
 
 if __name__ == "__main__":
