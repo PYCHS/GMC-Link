@@ -30,6 +30,11 @@ class TemporalMotionEncoder(nn.Module):
         super().__init__()
         self.seq_len = seq_len
 
+        # Normalize inputs before projection — SNR and velocity can have extreme
+        # outliers (e.g. snr → ∞ when ego-motion ≈ 0) that would blow up attention
+        # softmax and produce NaN gradients.
+        self.input_norm = nn.LayerNorm(motion_dim)
+
         # Per-frame projection: 13D → d_model
         self.input_proj = nn.Linear(motion_dim, d_model)
 
@@ -71,7 +76,8 @@ class TemporalMotionEncoder(nn.Module):
         """
         B, T, _ = x.shape
 
-        # Project each frame to d_model
+        # Normalize per-frame features, then project to d_model
+        x = self.input_norm(x)
         x = self.input_proj(x)  # (B, T, d_model)
 
         # Prepend [CLS] token
