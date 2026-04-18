@@ -21,7 +21,7 @@ Before committing to a bigger architectural bet (CLIP text encoder swap, cross-a
 
 - Changing the training protocol, the training data, or any weights.
 - Changing the language encoder or motion encoder.
-- Changing the per-sequence diagnostic math (`diag_gt_cosine_distributions.py` stays bitwise unchanged).
+- Changing the per-sequence diagnostic math. `diag_gt_cosine_distributions.py` receives one additive change: the raw `gt_cosines` / `nongt_cosines` arrays (already computed inside the loop) are now persisted in the output `.npz` alongside the existing `results` summary. All computation, logging, and plots stay identical.
 - Evaluating on train sequences. Held-out only.
 - Computing bootstrap confidence intervals or other second-order statistics. Out of scope for this pass; the spread across 3 seqs is the uncertainty signal.
 
@@ -270,11 +270,11 @@ For the next ~3 experiments after this spec lands (the "transition window"):
 
 | Order | File | Purpose | LoC |
 |---|---|---|---|
-| 1 | `diagnostics/aggregate_multiseq.py` (new) | Read .npz files, compute aggregates, write JSON/MD/PNG/comparison | ~250 |
-| 2 | `run_multiseq_eval.sh` (new) | Shell driver: 33 invocations + rename + call aggregator | ~40 |
-| 3 | `diagnostics/results/multiseq/` (new dir) | Output location | — |
-| 4 | `.gitignore` | Ignore `multiseq/*.npz` and `multiseq/*.png`; keep `*.md` tracked | 2 lines |
-| — | `diag_gt_cosine_distributions.py` | **Unchanged** | 0 |
+| 1 | `diagnostics/diag_gt_cosine_distributions.py` | Additive: persist raw `gt_cosines` / `nongt_cosines` arrays in the output `.npz`. No change to math, logging, or plots. | ~10 |
+| 2 | `diagnostics/aggregate_multiseq.py` (new) | Read .npz files, compute aggregates, write JSON/MD/PNG/comparison | ~250 |
+| 3 | `run_multiseq_eval.sh` (new) | Shell driver: 33 invocations + rename + call aggregator | ~40 |
+| 4 | `diagnostics/results/multiseq/` (new dir) | Output location | — |
+| 5 | `.gitignore` | Ignore `multiseq/*.npz` and `multiseq/*.png`; keep `*.md` tracked | 2 lines |
 
 ### Order of work
 
