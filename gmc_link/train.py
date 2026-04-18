@@ -22,7 +22,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from gmc_link.losses import AlignmentLoss
+from gmc_link.losses import AlignmentLoss, HardNegativeInfoNCE
 from gmc_link.alignment import MotionLanguageAligner
 from gmc_link.dataset import (
     MotionLanguageDataset, SequenceMotionLanguageDataset,
@@ -162,7 +162,6 @@ def setup_model_and_optimizer(
     ).to(device)
 
     if loss_name == "hninfo":
-        from gmc_link.losses import HardNegativeInfoNCE
         if learnable_temp:
             raise ValueError("--learnable-temp is not supported with --loss hninfo")
         criterion = HardNegativeInfoNCE(temperature=0.07, beta=beta, fnm=True)
@@ -396,6 +395,13 @@ def main() -> None:
     parser.add_argument("--seq-len", type=int, default=10,
                         help="Sequence length T for temporal_transformer (default: 10)")
     args = parser.parse_args()
+
+    if args.stage == "curriculum" and args.loss == "hninfo":
+        parser.error(
+            "--loss hninfo is not compatible with --stage curriculum "
+            "(stage 1 uses group labels; HN-InfoNCE requires sentence-level labels). "
+            "Run stage 2 standalone with --resume if you want HN-InfoNCE finetuning."
+        )
 
     # Parse extra features
     extra_features = None
