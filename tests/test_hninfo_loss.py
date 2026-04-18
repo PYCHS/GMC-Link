@@ -176,3 +176,39 @@ def test_sentence_ids_passed_through_training_contract():
     ids = torch.tensor([0, 1, 2, 3])
     _ = AlignmentLoss(temperature=0.07)(sim, ids)
     _ = HardNegativeInfoNCE(temperature=0.07, beta=0.0, fnm=False)(sim, ids)
+
+
+def test_end_to_end_forward_backward_one_batch():
+    """Simulate one training iteration end-to-end: build the real model,
+    run HN-InfoNCE forward, backward, optimizer step, and assert no NaN."""
+    from gmc_link.alignment import MotionLanguageAligner
+
+    torch.manual_seed(0)
+    device = torch.device("cpu")
+    model = MotionLanguageAligner(motion_dim=13, lang_dim=384, embed_dim=256).to(device)
+    loss_fn = HardNegativeInfoNCE(temperature=0.07, beta=1.0, fnm=True)
+    optim_obj = torch.optim.AdamW(model.parameters(), lr=1e-4)
+
+    # Realistic batch: 8 samples, some duplicate sentences (FNM exercise)
+    motion = torch.randn(8, 13)
+    lang   = torch.randn(8, 384)
+    sentence_ids = torch.tensor([10, 11, 10, 12, 13, 11, 14, 15])
+
+    model.train()
+    sim = model(motion, lang)
+    loss = loss_fn(sim, sentence_ids)
+    assert torch.isfinite(loss).item(), f"loss is not finite: {loss}"
+
+    optim_obj.zero_grad()
+    loss.backward()
+    # Every trainable param should receive a finite gradient
+    for name, p in model.named_parameters():
+        if p.requires_grad:
+            assert p.grad is not None, f"param {name} has no grad"
+            assert torch.isfinite(p.grad).all(), f"param {name} has non-finite grad"
+    optim_obj.step()
+
+    # Second forward should still be finite (catches NaN from bad backward)
+    sim2 = model(motion, lang)
+    loss2 = loss_fn(sim2, sentence_ids)
+    assert torch.isfinite(loss2).item(), f"loss after step is not finite: {loss2}"
