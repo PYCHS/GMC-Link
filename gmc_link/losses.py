@@ -83,8 +83,8 @@ class HardNegativeInfoNCE(nn.Module):
         # w_raw[i,j] = exp(β * sim[i,j]) on negatives, 0 elsewhere.
         # Then normalize: w[i,:] = w_raw[i,:] / w_raw[i,:].sum() * N_neg[i]
         # so Σⱼ w[i,j] = N_neg[i] (preserves β=0 → uniform weights = 1).
-        def weighted_neg_lse(lg, nm):
-            log_w_raw = (self.beta * sim_matrix).masked_fill(~nm, float("-inf"))
+        def weighted_neg_lse(lg, nm, sim_for_weights):
+            log_w_raw = (self.beta * sim_for_weights).masked_fill(~nm, float("-inf"))
             log_w_norm = log_w_raw - torch.logsumexp(log_w_raw, dim=1, keepdim=True)
             n_neg = nm.sum(dim=1, keepdim=True).clamp_min(1).to(lg.dtype)
             log_w = log_w_norm + torch.log(n_neg)  # rescale so Σw = N_neg
@@ -93,8 +93,8 @@ class HardNegativeInfoNCE(nn.Module):
             masked_logits = lg.masked_fill(~nm, float("-inf"))
             return torch.logsumexp(log_w + masked_logits, dim=1)
 
-        neg_lse_m2l = weighted_neg_lse(logits,   negative_mask)
-        neg_lse_l2m = weighted_neg_lse(logits.t(), negative_mask.t())
+        neg_lse_m2l = weighted_neg_lse(logits,     negative_mask,     sim_matrix)
+        neg_lse_l2m = weighted_neg_lse(logits.t(), negative_mask.t(), sim_matrix.t())
 
         den_m2l = torch.logsumexp(torch.stack([pos_logits, neg_lse_m2l], dim=1), dim=1)
         den_l2m = torch.logsumexp(torch.stack([pos_logits, neg_lse_l2m], dim=1), dim=1)

@@ -82,3 +82,44 @@ def test_beta_amplifies_hard_negative_gradient():
         f"β=2.0 should amplify hard-vs-easy gradient ratio more than β=0.5; "
         f"got ratio_small={ratio_small:.3f}, ratio_large={ratio_large:.3f}"
     )
+
+
+def test_beta_amplifies_l2m_direction_with_asymmetric_sim():
+    """On an asymmetric similarity matrix, β>0 should correctly route
+    hard-negative weights through sim.t() in the l2m direction.
+
+    Construct a matrix where the motion→language direction has its hard
+    negative at a DIFFERENT column than the language→motion direction.
+    Only correct per-direction weighting recovers both gradient asymmetries.
+    """
+    torch.manual_seed(0)
+
+    # Asymmetric sim: diagonal = positives. Off-diagonal:
+    # - Row 0 (motion 0 anchor): hard negative at col 2 (0.8)
+    # - Col 0 (language 0 anchor, i.e. row 0 of sim.t()): hard negative at col 1
+    #   (in sim.t(), row 0 == col 0 of sim) — engineered so sim[1,0] = 0.8.
+    # Row 0 col 1 = 0.0 (easy), Row 2 col 0 = 0.1 (middling), Row 1 col 0 = 0.8 (hard for l2m anchor 0).
+    sim_base = torch.tensor([
+        [0.9, 0.0, 0.8, -0.5],   # motion 0 row: hard neg at col 2
+        [0.8, 0.9, 0.0,  0.0],   # sim[1,0] = 0.8 → language 0 (in l2m) sees motion 1 as hard
+        [0.1, 0.0, 0.9,  0.0],
+        [-0.5, 0.0, 0.0, 0.9],
+    ])
+    sentence_ids = torch.tensor([0, 1, 2, 3])
+
+    def l2m_grad_ratio(beta):
+        sim = sim_base.clone().requires_grad_(True)
+        loss = HardNegativeInfoNCE(temperature=0.07, beta=beta, fnm=False)(sim, sentence_ids)
+        loss.backward()
+        # For the l2m direction anchored at language 0 (column 0 of sim),
+        # the hard negative is sim[1,0] = 0.8 and the easy one is sim[3,0] = -0.5.
+        g_hard = sim.grad[1, 0].abs().item()
+        g_easy = sim.grad[3, 0].abs().item()
+        return g_hard / (g_easy + 1e-9)
+
+    r_small = l2m_grad_ratio(beta=0.5)
+    r_large = l2m_grad_ratio(beta=2.0)
+    assert r_large > r_small, (
+        f"β=2.0 should amplify l2m hard/easy ratio more than β=0.5; "
+        f"got r_small={r_small:.3f}, r_large={r_large:.3f}"
+    )
