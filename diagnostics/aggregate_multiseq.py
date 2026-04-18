@@ -329,7 +329,7 @@ def write_comparison_markdown(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     seqs = list(seqs)
 
-    rows = []
+    rows: list[dict] = []
     for rec in records:
         hl = rec["headline"]
         per_seq_mean = _per_seq_mean_auc(rec)
