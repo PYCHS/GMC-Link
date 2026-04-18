@@ -66,9 +66,9 @@ class HardNegativeInfoNCE(nn.Module):
         """Return (w, n_neg) for inspection.
 
         w: (B, B) tensor of normalized negative weights (positives are 0).
-        n_neg: (B,) tensor of negative counts per anchor.
+        n_neg: (B,) long tensor of negative counts per anchor.
 
-        Invariant: w.sum(dim=1) == n_neg for all rows with n_neg > 0.
+        Invariant: w.sum(dim=1) == n_neg (with 0 == 0 for fully-masked rows).
         """
         B = sim_matrix.size(0)
         device = sim_matrix.device
@@ -82,8 +82,9 @@ class HardNegativeInfoNCE(nn.Module):
         log_w_raw = (self.beta * sim_matrix).masked_fill(~negative_mask, float("-inf"))
         log_w_norm = log_w_raw - torch.logsumexp(log_w_raw, dim=1, keepdim=True)
         n_neg = negative_mask.sum(dim=1).to(sim_matrix.dtype)
-        # log_w = log_w_norm + log(N_neg). Convert to linear scale, zero out masked.
         log_w = log_w_norm + torch.log(n_neg.clamp_min(1)).unsqueeze(1)
+        # Guard against NaN on fully-masked rows (log_w_norm was -inf − −inf = NaN there).
+        log_w = log_w.masked_fill(~negative_mask, float("-inf"))
         w = log_w.exp().masked_fill(~negative_mask, 0.0)
         return w, n_neg.long()
 
