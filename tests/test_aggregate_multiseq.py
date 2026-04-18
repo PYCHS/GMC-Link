@@ -322,3 +322,22 @@ def test_comparison_report_ranks_models_and_includes_max_gap(
     assert re.search(r"\d{4}: 0\.\d{3}", text), (
         "best_seq / worst_seq should be formatted as '{seq}: {auc:.3f}'"
     )
+
+
+def test_run_produces_all_artifacts(tmp_path: Path, synthetic_npz_dir: Path):
+    from diagnostics.aggregate_multiseq import run
+    out_dir = tmp_path / "aggregated"
+    run(
+        results_dir=synthetic_npz_dir,
+        output_dir=out_dir,
+        weights=[("model_A", "a.pth"), ("model_B", "b.pth")],
+        seqs=["0005", "0011", "0013"],
+        legacy_seq_0011_auc_by_tag={"model_A": 0.77, "model_B": 0.60},
+    )
+    # Per-weight artifacts
+    for tag in ["model_A", "model_B"]:
+        assert (out_dir / f"layer3_multiseq_{tag}.json").exists()
+        assert (out_dir / f"layer3_multiseq_{tag}.md").exists()
+        assert (out_dir / f"layer3_multiseq_{tag}.png").exists()
+    # Comparison artifact
+    assert (out_dir / "layer3_multiseq_comparison.md").exists()

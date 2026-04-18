@@ -393,5 +393,100 @@ def write_comparison_markdown(
     out_path.write_text("\n".join(lines) + "\n")
 
 
-if __name__ == "__main__":  # pragma: no cover — filled in Task 8
-    raise SystemExit("CLI entrypoint not yet implemented; see Task 8 of the plan.")
+def run(
+    results_dir: Path,
+    output_dir: Path,
+    weights: list[tuple[str, str]],  # (model_tag, weights_path)
+    seqs: Iterable[str],
+    legacy_seq_0011_auc_by_tag: dict[str, float | None] | None = None,
+) -> None:
+    """Build per-weight artifacts + cross-weight comparison, end-to-end."""
+    results_dir = Path(results_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    legacy = legacy_seq_0011_auc_by_tag or {}
+    seqs = list(seqs)
+
+    records: list[dict] = []
+    for model_tag, weights_path in weights:
+        record = build_weight_record(
+            results_dir=results_dir,
+            model_tag=model_tag,
+            weights_path=weights_path,
+            seqs=seqs,
+        )
+        records.append(record)
+        write_weight_json(record, output_dir / f"layer3_multiseq_{model_tag}.json")
+        write_weight_markdown(
+            record,
+            output_dir / f"layer3_multiseq_{model_tag}.md",
+            legacy_seq_0011_auc=legacy.get(model_tag),
+        )
+        write_weight_boxplot(record, output_dir / f"layer3_multiseq_{model_tag}.png")
+
+    write_comparison_markdown(
+        records, output_dir / "layer3_multiseq_comparison.md", seqs=seqs,
+    )
+
+
+def _parse_weights_arg(raw: list[str]) -> list[tuple[str, str]]:
+    """Each entry is either 'tag=path' or just 'path' (tag derived from stem).
+
+    Stem derivation: strip 'gmc_link_weights_' prefix and '.pth' suffix.
+    """
+    out: list[tuple[str, str]] = []
+    for entry in raw:
+        if "=" in entry:
+            tag, path = entry.split("=", 1)
+        else:
+            path = entry
+            stem = Path(path).stem
+            tag = stem.removeprefix("gmc_link_weights_")
+        out.append((tag, path))
+    return out
+
+
+def _parse_legacy_arg(raw: list[str]) -> dict[str, float]:
+    """Each entry: 'tag=0.779'."""
+    out: dict[str, float] = {}
+    for entry in raw:
+        tag, val = entry.split("=", 1)
+        out[tag] = float(val)
+    return out
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument(
+        "--results-dir", required=True, type=Path,
+        help="Directory containing layer3_{seq}_{model_tag}.npz files",
+    )
+    p.add_argument(
+        "--output-dir", required=True, type=Path,
+        help="Where to write per-weight JSON/MD/PNG and comparison MD",
+    )
+    p.add_argument(
+        "--weights", nargs="+", required=True,
+        help="One or more weight entries. Each is 'tag=path' or just 'path'.",
+    )
+    p.add_argument(
+        "--seqs", nargs="+", default=["0005", "0011", "0013"],
+        help="Sequences to aggregate (default: 0005 0011 0013)",
+    )
+    p.add_argument(
+        "--legacy-seq-0011", nargs="*", default=[],
+        help="Optional: 'tag=auc' entries for the legacy seq-0011 AUC line",
+    )
+    args = p.parse_args()
+    run(
+        results_dir=args.results_dir,
+        output_dir=args.output_dir,
+        weights=_parse_weights_arg(args.weights),
+        seqs=args.seqs,
+        legacy_seq_0011_auc_by_tag=_parse_legacy_arg(args.legacy_seq_0011),
+    )
+    print(f"Wrote aggregated artifacts to {args.output_dir}")
+
+
+if __name__ == "__main__":
+    main()
