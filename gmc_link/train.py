@@ -24,7 +24,11 @@ import matplotlib.pyplot as plt
 
 from gmc_link.losses import AlignmentLoss
 from gmc_link.alignment import MotionLanguageAligner
-from gmc_link.dataset import MotionLanguageDataset, collate_fn, build_training_data
+from gmc_link.dataset import (
+    MotionLanguageDataset, SequenceMotionLanguageDataset,
+    collate_fn, sequence_collate_fn,
+    build_training_data, compute_extra_dims,
+)
 from gmc_link.text_utils import TextEncoder
 
 
@@ -34,6 +38,7 @@ def train_one_epoch(
     optimizer: optim.Optimizer,
     loss_func: nn.Module,
     device: torch.device,
+    grad_clip: float = 0.0,
 ) -> Tuple[float, float]:
     """
     Train the model for a single epoch using CLIP-style cross-modal InfoNCE.
@@ -50,20 +55,28 @@ def train_one_epoch(
     correct = 0
     total = 0
 
-    for motion_features, language_features, expr_ids in dataloader:
-
-        motion_features = motion_features.to(device)
-        language_features = language_features.to(device)
-        expr_ids = expr_ids.to(device)
-
-        # ── NxN cosine similarity matrix ──
-        sim_matrix = model(motion_features, language_features)
+    for batch in dataloader:
+        if len(batch) == 4:
+            motion_features, padding_masks, language_features, expr_ids = batch
+            motion_features = motion_features.to(device)
+            padding_masks = padding_masks.to(device)
+            language_features = language_features.to(device)
+            expr_ids = expr_ids.to(device)
+            sim_matrix = model(motion_features, language_features, padding_mask=padding_masks)
+        else:
+            motion_features, language_features, expr_ids = batch
+            motion_features = motion_features.to(device)
+            language_features = language_features.to(device)
+            expr_ids = expr_ids.to(device)
+            sim_matrix = model(motion_features, language_features)
 
         # ── InfoNCE loss with false-negative masking ──
         loss = loss_func(sim_matrix, expr_ids)
 
         optimizer.zero_grad()
         loss.backward()
+        if grad_clip > 0:
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
 
         total_loss += loss.item()
@@ -85,6 +98,9 @@ def setup_data(
     data_root: str,
     sequences: list,
     batch_size: int,
+    use_group_labels: bool = False,
+    extra_features: list = None,
+    seq_len: int = 0,
 ) -> Optional[DataLoader]:
     """
     Initialize text encoder, build training dataset, and return a DataLoader.
@@ -93,24 +109,37 @@ def setup_data(
     encoder = TextEncoder(device=str(device))
 
     print("Building training data...")
-    all_motions, all_languages, all_labels = build_training_data(
+    result = build_training_data(
         data_root=data_root,
         sequences=sequences,
         text_encoder=encoder,
+        use_group_labels=use_group_labels,
+        extra_features=extra_features,
+        seq_len=seq_len,
     )
 
-    print(f"Total training samples: {len(all_motions)}")
-    if len(all_motions) == 0:
-        return None
+    if seq_len > 0:
+        seq_motion, seq_masks, seq_language, seq_labels = result
+        if len(seq_motion) == 0:
+            return None
+        print(f"Total training sequences: {len(seq_motion)}")
+        dataset = SequenceMotionLanguageDataset(seq_motion, seq_masks, seq_language, seq_labels)
+        chosen_collate = sequence_collate_fn
+    else:
+        motion_data, language_data, label_ids = result
+        if len(motion_data) == 0:
+            return None
+        print(f"Total training samples: {len(motion_data)}")
+        dataset = MotionLanguageDataset(motion_data, language_data, label_ids)
+        chosen_collate = collate_fn
 
-    dataset = MotionLanguageDataset(all_motions, all_languages, all_labels)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=chosen_collate,
         pin_memory=True,
-        drop_last=True,  # Consistent batch size for contrastive learning
+        drop_last=True,
         num_workers=4,
         persistent_workers=True,
     )
@@ -119,19 +148,28 @@ def setup_data(
 
 
 def setup_model_and_optimizer(
-    device: torch.device, lang_dim: int, learning_rate: float, epochs: int
+    device: torch.device, lang_dim: int, learning_rate: float, epochs: int,
+    learnable_temp: bool = False, motion_dim: int = 13,
+    architecture: str = "mlp", seq_len: int = 10,
 ) -> Tuple[
     MotionLanguageAligner, nn.Module, optim.Optimizer, optim.lr_scheduler.LRScheduler
 ]:
     """
     Initialize the MotionLanguageAligner, InfoNCE loss, and AdamW optimizer.
     """
-    model = MotionLanguageAligner(motion_dim=13, lang_dim=lang_dim, embed_dim=256).to(
-        device
-    )
+    model = MotionLanguageAligner(
+        motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256,
+        architecture=architecture, seq_len=seq_len,
+    ).to(device)
 
-    criterion = AlignmentLoss(temperature=0.07)
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+    criterion = AlignmentLoss(temperature=0.07, learnable=learnable_temp)
+
+    # Include temperature param in optimizer if learnable
+    params = list(model.parameters())
+    if learnable_temp:
+        params += list(criterion.parameters())
+
+    optimizer = optim.AdamW(params, lr=learning_rate)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs, eta_min=1e-5
     )
@@ -185,30 +223,47 @@ def train_loop(
     device: torch.device,
     epochs: int,
     save_path: str = "gmc_link_weights.pth",
+    warmup_epochs: int = 0,
+    grad_clip: float = 0.0,
 ) -> None:
     """
     Execute the main training loop across all epochs and save the final weights.
     """
     print(f"Starting training on {device} | {len(dataloader)} batches/epoch...")
+    if warmup_epochs > 0:
+        print(f"  LR warmup: {warmup_epochs} epochs")
+    if grad_clip > 0:
+        print(f"  Gradient clipping: max_norm={grad_clip}")
+
+    base_lr = optimizer.param_groups[0]["lr"]
     loss_history = []
     accuracy_history = []
     lr_history = []
 
     for epoch in tqdm(range(epochs)):
+        # Linear warmup: scale LR from 0 to base_lr over warmup_epochs
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            warmup_lr = base_lr * (epoch + 1) / warmup_epochs
+            for pg in optimizer.param_groups:
+                pg["lr"] = warmup_lr
+
         avg_loss, accuracy = train_one_epoch(
-            model, dataloader, optimizer, criterion, device
+            model, dataloader, optimizer, criterion, device, grad_clip=grad_clip
         )
-        scheduler.step()
+        # Only step cosine scheduler after warmup completes
+        if epoch >= warmup_epochs:
+            scheduler.step()
 
         loss_history.append(avg_loss)
         accuracy_history.append(accuracy)
-        lr_history.append(scheduler.get_last_lr()[0])
+        lr_history.append(optimizer.param_groups[0]["lr"])
 
         if (epoch + 1) % 20 == 0:
-            current_lr = scheduler.get_last_lr()[0]
+            current_lr = optimizer.param_groups[0]["lr"]
+            tau_str = f" | τ={criterion.temperature:.4f}" if hasattr(criterion, 'log_inv_temp') and criterion.log_inv_temp is not None else ""
             print(
                 f"Epoch [{epoch+1}/{epochs}] | Loss: {avg_loss:.4f} | "
-                f"Acc: {accuracy:.2%} | LR: {current_lr:.6f}"
+                f"Acc: {accuracy:.2%} | LR: {current_lr:.6f}{tau_str}"
             )
 
     # Save model weights + temperature
@@ -236,13 +291,67 @@ V2_TRAIN_SEQS = [
 ]
 
 
+def _run_single_stage(
+    device: torch.device,
+    data_root: str,
+    sequences: list,
+    batch_size: int,
+    lang_dim: int,
+    lr: float,
+    epochs: int,
+    save_path: str,
+    use_group_labels: bool = False,
+    resume_path: str = None,
+    warmup_epochs: int = 0,
+    learnable_temp: bool = False,
+    grad_clip: float = 0.0,
+    extra_features: list = None,
+    architecture: str = "mlp",
+    seq_len: int = 10,
+) -> None:
+    """Run a single training stage (used by both standalone and curriculum modes)."""
+    dataloader = setup_data(device, data_root, sequences, batch_size,
+                            use_group_labels=use_group_labels,
+                            extra_features=extra_features,
+                            seq_len=seq_len if architecture == "temporal_transformer" else 0)
+    if dataloader is None:
+        print("ERROR: No training data found.")
+        return
+
+    motion_dim = 13 + compute_extra_dims(extra_features)
+    model, criterion, optimizer, scheduler = setup_model_and_optimizer(
+        device, lang_dim, lr, epochs, learnable_temp=learnable_temp,
+        motion_dim=motion_dim,
+        architecture=architecture, seq_len=seq_len,
+    )
+
+    if resume_path is not None:
+        print(f"  Loading weights from {resume_path}...")
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        if isinstance(checkpoint, dict) and "model" in checkpoint:
+            model.load_state_dict(checkpoint["model"])
+        else:
+            model.load_state_dict(checkpoint)
+
+    train_loop(model, dataloader, optimizer, scheduler, criterion, device, epochs,
+               save_path=save_path, warmup_epochs=warmup_epochs, grad_clip=grad_clip)
+
+    # Append metadata to checkpoint
+    checkpoint = torch.load(save_path, map_location=device, weights_only=False)
+    checkpoint["motion_dim"] = motion_dim
+    checkpoint["extra_features"] = extra_features
+    checkpoint["architecture"] = architecture
+    checkpoint["seq_len"] = seq_len if architecture == "temporal_transformer" else None
+    torch.save(checkpoint, save_path)
+
+
 def main() -> None:
     """
     Main training execution block. All paths configurable via CLI args.
 
     Usage:
         python -m gmc_link.train --split v1 --data-root refer-kitti
-        python -m gmc_link.train --split v2 --data-root refer-kitti-v2
+        python -m gmc_link.train --split v1 --stage curriculum
     """
     import argparse
 
@@ -257,7 +366,31 @@ def main() -> None:
                         help="Batch size (default: 256 for v1, 512 for v2)")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--warmup-epochs", type=int, default=0, help="Linear LR warmup epochs")
+    parser.add_argument("--learnable-temp", action="store_true", help="Make temperature a learnable parameter")
+    parser.add_argument("--grad-clip", type=float, default=0.0, help="Gradient clipping max_norm (0=disabled)")
+    parser.add_argument("--stage", default=None, choices=["1", "2", "curriculum"],
+                        help="Curriculum stage: 1=group-level, 2=fine-tune, curriculum=both")
+    parser.add_argument("--resume", default=None, help="Path to pretrained weights (for stage 2)")
+    parser.add_argument("--extra-features", default=None,
+                        help="Comma-separated extra features (e.g., speed_m,ego_motion)")
+    parser.add_argument("--architecture", default="mlp", choices=["mlp", "temporal_transformer"],
+                        help="Motion encoder architecture (default: mlp)")
+    parser.add_argument("--seq-len", type=int, default=10,
+                        help="Sequence length T for temporal_transformer (default: 10)")
     args = parser.parse_args()
+
+    # Parse extra features
+    extra_features = None
+    if args.extra_features:
+        extra_features = [f.strip() for f in args.extra_features.split(",")]
+        from gmc_link.dataset import EXTRA_FEATURE_DIMS
+        for f in extra_features:
+            if f not in EXTRA_FEATURE_DIMS:
+                print(f"ERROR: Unknown feature '{f}'. Valid: {list(EXTRA_FEATURE_DIMS.keys())}")
+                return
+        extra_dims = compute_extra_dims(extra_features)
+        print(f"Extra features: {extra_features} (+{extra_dims}D → {13 + extra_dims}D)")
 
     # --- Configuration ---
     device = torch.device(
@@ -274,28 +407,64 @@ def main() -> None:
         sequences = V1_TRAIN_SEQS
         batch_size = args.batch_size or 256
         save_path = args.save_path or "gmc_link_weights_v1train.pth"
-        print(f"Training on Refer-KITTI V1 train split → {save_path}")
     else:
         data_root = args.data_root or "refer-kitti-v2"
         sequences = V2_TRAIN_SEQS
         batch_size = args.batch_size or 512
         save_path = args.save_path or "gmc_link_weights.pth"
-        print(f"Training on Refer-KITTI V2, seqs 0000-0015 → {save_path}")
+
+    # --- Curriculum training ---
+    if args.stage == "curriculum":
+        stage1_path = save_path.replace(".pth", "_stage1.pth")
+        curriculum_path = save_path.replace(".pth", "_curriculum.pth")
+
+        print(f"═══ Stage 1: Group-level training (100 epochs) → {stage1_path}")
+        print(f"  data_root={data_root}  batch_size={batch_size}  epochs=100  lr={args.lr}")
+        _run_single_stage(
+            device, data_root, sequences, batch_size, lang_dim,
+            lr=args.lr, epochs=100, save_path=stage1_path,
+            use_group_labels=True,
+            warmup_epochs=args.warmup_epochs, grad_clip=args.grad_clip,
+            extra_features=extra_features,
+            architecture=args.architecture, seq_len=args.seq_len,
+        )
+
+        stage2_lr = args.lr * 0.1
+        print(f"\n═══ Stage 2: Fine expression training (50 epochs) → {curriculum_path}")
+        print(f"  data_root={data_root}  batch_size={batch_size}  epochs=50  lr={stage2_lr}")
+        _run_single_stage(
+            device, data_root, sequences, batch_size, lang_dim,
+            lr=stage2_lr, epochs=50, save_path=curriculum_path,
+            use_group_labels=False, resume_path=stage1_path,
+            warmup_epochs=0, grad_clip=args.grad_clip,
+            extra_features=extra_features,
+            architecture=args.architecture, seq_len=args.seq_len,
+        )
+        return
+
+    # --- Single stage ---
+    if args.stage == "1":
+        save_path = args.save_path or save_path.replace(".pth", "_stage1.pth")
+        print(f"Stage 1: Group-level training → {save_path}")
+        use_group = True
+    elif args.stage == "2":
+        save_path = args.save_path or save_path.replace(".pth", "_curriculum.pth")
+        print(f"Stage 2: Fine expression training → {save_path}")
+        use_group = False
+    else:
+        print(f"Training on {'V1' if args.split == 'v1' else 'V2'} → {save_path}")
+        use_group = False
 
     print(f"  data_root={data_root}  batch_size={batch_size}  epochs={args.epochs}  lr={args.lr}")
 
-    # --- Pipeline ---
-    dataloader = setup_data(device, data_root, sequences, batch_size)
-    if dataloader is None:
-        print("ERROR: No training data found.")
-        return
-
-    model, criterion, optimizer, scheduler = setup_model_and_optimizer(
-        device, lang_dim, args.lr, args.epochs
+    _run_single_stage(
+        device, data_root, sequences, batch_size, lang_dim,
+        lr=args.lr, epochs=args.epochs, save_path=save_path,
+        use_group_labels=use_group, resume_path=args.resume,
+        warmup_epochs=args.warmup_epochs, learnable_temp=args.learnable_temp,
+        grad_clip=args.grad_clip, extra_features=extra_features,
+        architecture=args.architecture, seq_len=args.seq_len,
     )
-
-    train_loop(model, dataloader, optimizer, scheduler, criterion, device, args.epochs,
-               save_path=save_path)
 
 
 if __name__ == "__main__":
