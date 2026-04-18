@@ -62,12 +62,16 @@ class HardNegativeInfoNCE(nn.Module):
         self.beta = beta
         self.fnm = fnm
 
-    def forward(self, sim_matrix, sentence_ids):
+    def forward(self, sim_matrix, sentence_ids=None):
+        if self.fnm and sentence_ids is None:
+            raise ValueError("sentence_ids is required when fnm=True")
         B = sim_matrix.size(0)
         device = sim_matrix.device
         logits = sim_matrix / self.temperature
 
-        # For β=0 and fnm=False, this must equal F.cross_entropy(logits, diag_targets)
+        # Task 1 scaffold: β and fnm are stored but unused. Weighting and FNM
+        # are wired in Tasks 2-3. At this stage the forward pass is a straight-
+        # through InfoNCE, matching AlignmentLoss.
         targets = torch.arange(B, device=device)
         m2l_loss = F.cross_entropy(logits, targets)
         l2m_loss = F.cross_entropy(logits.t(), targets)
