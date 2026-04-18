@@ -45,3 +45,40 @@ def test_fnm_excludes_same_sentence_pairs():
         f"FNM should reduce loss by masking same-sentence pairs; "
         f"got fnm_on={loss_fnm_on.item():.4f}, fnm_off={loss_fnm_off.item():.4f}"
     )
+
+
+def test_beta_amplifies_hard_negative_gradient():
+    """Higher β should produce a larger gradient norm at the hardest negative's
+    input position, relative to easy negatives."""
+    torch.manual_seed(42)
+
+    # 4 samples with all-distinct sentences → negatives are 3 off-diagonal
+    # entries per row. Build a similarity matrix with one clear hard negative
+    # (row 0, column 2 — cosine 0.8, near the positive 0.9) and one easy
+    # negative (row 0, column 3 — cosine -0.5).
+    sim_base = torch.tensor([
+        [0.9, 0.1, 0.8, -0.5],
+        [0.1, 0.9, 0.0,  0.0],
+        [0.8, 0.0, 0.9,  0.0],
+        [-0.5, 0.0, 0.0, 0.9],
+    ])
+    sentence_ids = torch.tensor([0, 1, 2, 3])
+
+    def grad_at(beta, col):
+        sim = sim_base.clone().requires_grad_(True)
+        loss = HardNegativeInfoNCE(temperature=0.07, beta=beta, fnm=False)(sim, sentence_ids)
+        loss.backward()
+        return sim.grad[0, col].abs().item()
+
+    g_hard_small = grad_at(beta=0.5, col=2)
+    g_easy_small = grad_at(beta=0.5, col=3)
+    g_hard_large = grad_at(beta=2.0, col=2)
+    g_easy_large = grad_at(beta=2.0, col=3)
+
+    ratio_small = g_hard_small / (g_easy_small + 1e-9)
+    ratio_large = g_hard_large / (g_easy_large + 1e-9)
+
+    assert ratio_large > ratio_small, (
+        f"β=2.0 should amplify hard-vs-easy gradient ratio more than β=0.5; "
+        f"got ratio_small={ratio_small:.3f}, ratio_large={ratio_large:.3f}"
+    )

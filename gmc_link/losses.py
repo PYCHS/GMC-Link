@@ -69,40 +69,36 @@ class HardNegativeInfoNCE(nn.Module):
         device = sim_matrix.device
         logits = sim_matrix / self.temperature
 
-        # Masks
         diag = torch.eye(B, dtype=torch.bool, device=device)
         if self.fnm:
             same_sentence = sentence_ids[:, None] == sentence_ids[None, :]
         else:
-            same_sentence = diag  # only the diagonal is a "positive"
-        positive_mask = same_sentence            # (B, B) bool
-        negative_mask = (~positive_mask) & ~diag  # exclude self-pair and same-sentence
+            same_sentence = diag
+        positive_mask = same_sentence
+        negative_mask = (~positive_mask) & ~diag
 
-        # Weighted logsumexp: denominator = exp(logits_pos_i) + Σ_j w[i,j] * exp(logits[i,j])
-        # For β=0 (no mining), weights are uniform = 1 over the negative set.
-        # Implemented as masked logsumexp — mask negatives we want to skip
-        # by adding -inf to their logits before logsumexp.
-        neg_logits = logits.masked_fill(~negative_mask, float("-inf"))
-
-        # Positive logit: diagonal (motion_i vs its own caption_i)
         pos_logits = logits.diagonal()  # (B,)
 
-        # m2l: anchor = motion, candidates = language (columns)
-        # logsumexp over each row's unmasked negatives, plus the positive
-        neg_lse_m2l = torch.logsumexp(neg_logits, dim=1)
-        # Combine positive + negative denominator
-        den_m2l = torch.logsumexp(
-            torch.stack([pos_logits, neg_lse_m2l], dim=1), dim=1
-        )
+        # ── β-weighted denominator for motion→language direction ──
+        # w_raw[i,j] = exp(β * sim[i,j]) on negatives, 0 elsewhere.
+        # Then normalize: w[i,:] = w_raw[i,:] / w_raw[i,:].sum() * N_neg[i]
+        # so Σⱼ w[i,j] = N_neg[i] (preserves β=0 → uniform weights = 1).
+        def weighted_neg_lse(lg, nm):
+            log_w_raw = (self.beta * sim_matrix).masked_fill(~nm, float("-inf"))
+            log_w_norm = log_w_raw - torch.logsumexp(log_w_raw, dim=1, keepdim=True)
+            n_neg = nm.sum(dim=1, keepdim=True).clamp_min(1).to(lg.dtype)
+            log_w = log_w_norm + torch.log(n_neg)  # rescale so Σw = N_neg
+
+            # Weighted logsumexp: logsumexp_j( log(w[i,j]) + logits[i,j] ) over negatives
+            masked_logits = lg.masked_fill(~nm, float("-inf"))
+            return torch.logsumexp(log_w + masked_logits, dim=1)
+
+        neg_lse_m2l = weighted_neg_lse(logits,   negative_mask)
+        neg_lse_l2m = weighted_neg_lse(logits.t(), negative_mask.t())
+
+        den_m2l = torch.logsumexp(torch.stack([pos_logits, neg_lse_m2l], dim=1), dim=1)
+        den_l2m = torch.logsumexp(torch.stack([pos_logits, neg_lse_l2m], dim=1), dim=1)
+
         l_m2l = (den_m2l - pos_logits).mean()
-
-        # l2m: anchor = language (transpose logits)
-        logits_t = logits.t()
-        neg_logits_t = logits_t.masked_fill(~negative_mask.t(), float("-inf"))
-        neg_lse_l2m = torch.logsumexp(neg_logits_t, dim=1)
-        den_l2m = torch.logsumexp(
-            torch.stack([pos_logits, neg_lse_l2m], dim=1), dim=1
-        )
         l_l2m = (den_l2m - pos_logits).mean()
-
         return (l_m2l + l_l2m) / 2.0
