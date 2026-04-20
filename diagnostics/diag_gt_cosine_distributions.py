@@ -112,12 +112,16 @@ def compute_motion_vectors_for_all_tracks(
     # {frame_id: {track_id: (mid_dx, mid_dy, cx_n, cy_n)}}
     frame_track_data = {}
 
+    needs_accel_multiscale = "accel_multiscale" in per_track_feats
+
     for tid, centroids in all_track_centroids.items():
         results = []
         # Track's frames within the active set, sorted
         track_frames = sorted(f for f in centroids if f in active_frame_ids)
         if len(track_frames) < 2:
             continue
+
+        track_scale_vels = {} if needs_accel_multiscale else None
 
         for i in range(len(track_frames)):
             curr_fid = track_frames[i]
@@ -181,11 +185,33 @@ def compute_motion_vectors_for_all_tracks(
                 dw, dh, cx / w, cy / h, bw / w, bh_val / h, snr,
             ]
 
-            # Append per-track extras
+            # Per-track extras: compute true-temporal accel if requested
+            accel_per_scale = None
+            if needs_accel_multiscale:
+                accel_per_scale = []
+                for gap_idx, gap in enumerate(FRAME_GAPS):
+                    past_i = i - gap
+                    if past_i < 0:
+                        accel_per_scale.append((0.0, 0.0))
+                    else:
+                        past_fid = track_frames[past_i]
+                        past_vels = track_scale_vels.get(past_fid)
+                        if past_vels is None:
+                            accel_per_scale.append((0.0, 0.0))
+                        else:
+                            now_dx, now_dy = scale_velocities[gap_idx]
+                            past_dx, past_dy = past_vels[gap_idx]
+                            accel_per_scale.append((
+                                (now_dx - past_dx) / gap,
+                                (now_dy - past_dy) / gap,
+                            ))
+                track_scale_vels[curr_fid] = list(scale_velocities)
+
             if per_track_feats:
                 base_vec.extend(compute_per_track_extras(
                     per_track_feats, scale_velocities,
                     ego_dx_m=ego_dx_m, ego_dy_m=ego_dy_m,
+                    accel_per_scale=accel_per_scale,
                 ))
 
             # Store mid-scale data for relational post-pass

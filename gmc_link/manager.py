@@ -78,6 +78,10 @@ class GMCLinkManager:
         # CUMULATIVE HOMOGRAPHY: Store original coordinates (never warped)
         self.centroid_history: Dict[int, deque] = {}
         self.wh_history: Dict[int, deque] = {}
+        # Per-track scale-velocity history for accel_multiscale: {tid: [(frame_idx, scale_vels)]}
+        # frame_idx is the manager's live frame counter (monotone); deque keeps last max_gap+1 entries.
+        self.scale_vel_history: Dict[int, deque] = {}
+        self._frame_counter: int = -1
 
         # Store cumulative homographies: H[i] warps frame[t-i] -> current frame
         self.homography_buffer: deque = deque(maxlen=frame_gap + 1)
@@ -111,6 +115,9 @@ class GMCLinkManager:
         """
         if not active_tracks:
             return {}, {}, {}
+
+        if update_state:
+            self._frame_counter += 1
 
         img_h, img_w = frame.shape[:2]
         frame_shape = (img_h, img_w)
@@ -269,7 +276,35 @@ class GMCLinkManager:
                 ]
                 if per_track_names:
                     scale_velocities = [(dx_s, dy_s), (dx_m, dy_m), (dx_l, dy_l)]
-                    extras = compute_per_track_extras(per_track_names, scale_velocities)
+                    accel_per_scale = None
+                    if "accel_multiscale" in per_track_names:
+                        if tid not in self.scale_vel_history:
+                            self.scale_vel_history[tid] = deque(maxlen=self.frame_gap + 1)
+                        hist = self.scale_vel_history[tid]
+                        counter = self._frame_counter
+                        accel_per_scale = []
+                        for gap_idx, gap in enumerate(self.FRAME_GAPS):
+                            past = None
+                            for (pc, pv) in reversed(hist):
+                                lag = counter - pc
+                                if lag >= gap and lag <= 2 * gap:
+                                    past = pv
+                                    break
+                            if past is None:
+                                accel_per_scale.append((0.0, 0.0))
+                            else:
+                                now_dx, now_dy = scale_velocities[gap_idx]
+                                past_dx, past_dy = past[gap_idx]
+                                accel_per_scale.append((
+                                    (now_dx - past_dx) / gap,
+                                    (now_dy - past_dy) / gap,
+                                ))
+                        if update_state:
+                            hist.append((counter, list(scale_velocities)))
+                    extras = compute_per_track_extras(
+                        per_track_names, scale_velocities,
+                        accel_per_scale=accel_per_scale,
+                    )
                     spatial_motion = np.concatenate(
                         [spatial_motion, np.array(extras, dtype=np.float32)]
                     )
@@ -325,5 +360,7 @@ class GMCLinkManager:
                 del self.centroid_history[d]
                 if d in self.wh_history:
                     del self.wh_history[d]
+                if d in self.scale_vel_history:
+                    del self.scale_vel_history[d]
 
         return scores_dict, velocities_dict, cosine_dict

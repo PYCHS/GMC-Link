@@ -134,7 +134,8 @@ def compute_extra_dims(extra_features):
     return sum(EXTRA_FEATURE_DIMS[f] for f in extra_features)
 
 
-def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0, ego_dy_m=0.0):
+def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0,
+                             ego_dy_m=0.0, accel_per_scale=None):
     """
     Compute per-track extra features (F1-F4) from existing velocity data.
 
@@ -142,6 +143,9 @@ def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0, ego
         extra_features: list of feature names to compute
         scale_velocities: [(dx_s, dy_s), (dx_m, dy_m), (dx_l, dy_l)]
         ego_dx_m, ego_dy_m: mid-scale ego motion components
+        accel_per_scale: optional [(ax_s, ay_s), (ax_m, ay_m), (ax_l, ay_l)]
+            with true temporal acceleration (v_k[t] - v_k[t-k])/k per scale.
+            If None and accel_multiscale requested, zeros are emitted.
 
     Returns:
         list of float values to append to the base 13D vector
@@ -164,20 +168,12 @@ def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0, ego
         elif feat == "ego_motion":
             extras.extend([ego_dx_m, ego_dy_m])
         elif feat == "accel_multiscale":
-            # Second-order per-scale: use difference across the scale pair as
-            # a proxy for d²x/dt² since we already have velocities at gaps
-            # {2,5,10}. This is equivalent to (v_long - v_short) per axis,
-            # normalized by scale. We emit all three axis-scale combos.
-            # Short-mid, mid-long, short-long deltas capture different
-            # temporal acceleration signatures.
-            extras.extend([
-                dx_m - dx_s,  # accel between short and mid
-                dy_m - dy_s,
-                dx_l - dx_m,  # accel between mid and long
-                dy_l - dy_m,
-                dx_l - dx_s,  # accel between short and long
-                dy_l - dy_s,
-            ])
+            if accel_per_scale is None:
+                extras.extend([0.0] * 6)
+            else:
+                for ax, ay in accel_per_scale:
+                    extras.append(float(ax))
+                    extras.append(float(ay))
         elif feat == "heading_sincos":
             # Smooth heading encoding per scale (avoids atan2 ±π discontinuity)
             # When |v|→0, atan2(0,0)=0 → sin=0, cos=1 (stationary encoded).
@@ -676,6 +672,25 @@ def _find_future_frame(sorted_frames, start_idx, gap):
     return None
 
 
+def _find_past_frame_id(vel_hist, curr_fid, gap):
+    """Return frame_id in vel_hist closest to `curr_fid - gap` (within [gap, 2*gap] back)."""
+    if not vel_hist:
+        return None
+    target = curr_fid - gap
+    best_fid = None
+    best_err = None
+    for fid in vel_hist:
+        if fid > target:
+            continue
+        if curr_fid - fid > 2 * gap:
+            continue
+        err = abs(fid - target)
+        if best_err is None or err < best_err:
+            best_err = err
+            best_fid = fid
+    return best_fid
+
+
 def _compute_velocity_at_gap(
     centroids, curr_fid, future_fid, frame_shape, seq, frame_dir, orb_engine
 ):
@@ -767,10 +782,14 @@ def _generate_positive_pairs(
     # {frame_id: {track_id: (dx_m, dy_m, cx_n, cy_n)}}
     frame_track_data = {}
 
+    needs_accel_multiscale = "accel_multiscale" in per_track_feats
+
     for tid, centroids in track_centroids.items():
         track_start_idx = len(motion_data)
         track_frame_ids = []
         sorted_frames = sorted(centroids.keys())
+        # Per-track velocity history: {frame_id: [(dx,dy) per scale]}
+        track_vel_hist = {} if needs_accel_multiscale else None
         for i in range(len(sorted_frames)):
             curr_fid = sorted_frames[i]
 
@@ -798,6 +817,22 @@ def _generate_positive_pairs(
 
             if not any_valid:
                 continue
+
+            accel_per_scale = None
+            if needs_accel_multiscale:
+                accel_per_scale = []
+                for gap_idx, gap in enumerate(frame_gaps):
+                    past_fid = _find_past_frame_id(track_vel_hist, curr_fid, gap)
+                    if past_fid is None:
+                        accel_per_scale.append((0.0, 0.0))
+                    else:
+                        past_dx, past_dy = track_vel_hist[past_fid][gap_idx]
+                        now_dx, now_dy = scale_velocities[gap_idx]
+                        accel_per_scale.append((
+                            (now_dx - past_dx) / gap,
+                            (now_dy - past_dy) / gap,
+                        ))
+                track_vel_hist[curr_fid] = list(scale_velocities)
 
             # dw, dh from primary scale (mid)
             primary_future_j = _find_future_frame(sorted_frames, i, frame_gaps[primary_gap_idx])
@@ -839,6 +874,7 @@ def _generate_positive_pairs(
             base_vec.extend(compute_per_track_extras(
                 per_track_feats, scale_velocities,
                 ego_dx_m=ego_dx_m, ego_dy_m=ego_dy_m,
+                accel_per_scale=accel_per_scale,
             ))
 
             # Store for relational feature computation
