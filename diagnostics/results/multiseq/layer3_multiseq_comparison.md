@@ -13,3 +13,4 @@ AUC = probability that a randomly chosen GT-matching track gets a higher cosine 
 | v1train_exp36b | 0.754 | 0.809 ± 0.081 | 0005: 0.790 | 0013: 0.739 | 0.051 |
 | v1train_exp36a | 0.747 | 0.797 ± 0.057 | 0013: 0.773 | 0005: 0.756 | 0.016 |
 | v1train_exp36a_v2 | 0.741 | 0.815 ± 0.046 | 0011: 0.775 | 0013: 0.725 | 0.050 |
+| v1train_exp36d_bge | 0.735 | 0.802 ± 0.052 | 0013: 0.831 | 0005: 0.741 | 0.091 |
