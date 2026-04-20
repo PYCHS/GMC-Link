@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Training data cache (build_training_data disk cache)
+cache/
+
 # C extensions
 *.so
 
@@ -238,3 +241,5 @@ events.out.tfevents.*
 # Multi-sequence evaluation results
 diagnostics/results/multiseq/*.npz
 diagnostics/results/multiseq/*.png
+
+diagnostics/results/label_audit/*.mp4
