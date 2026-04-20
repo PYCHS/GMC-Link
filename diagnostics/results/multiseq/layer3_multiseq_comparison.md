@@ -8,5 +8,6 @@ AUC = probability that a randomly chosen GT-matching track gets a higher cosine 
 | model_tag | mean_auc_micro | mean_auc_macro ± std | best_seq | worst_seq | max_gap |
 |---|---|---|---|---|---|
 | v1train_stage1 | 0.779 | 0.838 ± 0.064 | 0005: 0.821 | 0011: 0.779 | 0.042 |
+| v1train_exp36b | 0.754 | 0.809 ± 0.081 | 0005: 0.790 | 0013: 0.739 | 0.051 |
 | v1train_exp36a | 0.747 | 0.797 ± 0.057 | 0013: 0.773 | 0005: 0.756 | 0.016 |
 | v1train_exp36a_v2 | 0.741 | 0.815 ± 0.046 | 0011: 0.775 | 0013: 0.725 | 0.050 |
