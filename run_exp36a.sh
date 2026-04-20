@@ -20,7 +20,6 @@ echo "[$(date +%H:%M:%S)] Training ${WEIGHTS} (13D + accel_multiscale + heading_
     --split v1 \
     --extra-features accel_multiscale,heading_sincos \
     --epochs 5 --lr 3e-4 --batch-size 128 \
-    --seed 42 \
     --save-path "${WEIGHTS}"
 
 echo "[$(date +%H:%M:%S)] Evaluating on held-out seqs"
