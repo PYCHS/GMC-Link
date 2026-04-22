@@ -370,21 +370,47 @@ Exp 38 is complete when **all** of the following are true:
 
 ---
 
-## 13. Timeline (optimistic, 3060 Ti solo)
+## 13. Timeline (realistic, 3060 Ti solo)
 
-| Stage | Task | Duration |
+**Note — G0 pre-cleared:** FlexHook bare V1 repro at `53.824` HOTA already exists
+at `/home/seanachan/FlexHook/retest-kitti-1/refer-kitti-best/results/pedestrian_summary.txt`
+(paper 53.82, match within 0.004). Stage 0 dropped from schedule.
+
+### Risk-weighted milestones
+
+| Milestone | Day | What's done |
 |---|---|---|
-| 0 | FlexHook bare repro + env setup | 1-2 days |
-| 1 | `flexhook_ego_extractor.py` + ORB cache build for V1 | 2-3 days |
-| 2 | `mymodel.py` mod + coord alignment unit tests | 2 days |
-| 3 | 38-A headline finetune + eval + memo | 2 days |
-| 4 | 38-A controls (A1, A2, A3) | 2 days |
-| 5 (cond.) | 38-B iterative ego (3 arms) | 3 days |
-| 6 (cond.) | 38-C dense field | 4 days |
-| 7 (cond.) | V2 confirmation | 2 days |
-| 8 | Retrospective + paper outline | 2 days |
+| M1 | T+5 | Ego extractor + ORB cache built for V1 seqs 0005, 0011, 0013 |
+| M2 | T+8 | `mymodel.py` mod + coord-alignment unit tests pass |
+| M3 | T+12 | 38-A headline finetune + HOTA eval done — decision gate applied (§1) |
+| M4 | T+14 | A3 `bare_finetuned` control + 38-A memo written |
+| M5 (cond.) | T+21 | 38-B iterative ego sweep (iter ∈ {1,2,3}) if 38-A positive |
+| M6 (cond.) | T+28 | 38-C dense motion field + V2 confirmation run |
+| M7 | T+30 | Retrospective + paper outline + memory update |
 
-**Total headline-only path: ~9 days.** Full ablation path: ~3 weeks.
+**Headline-only path (M1–M4): ~14 days realistic.**
+**Full ablation path (M1–M7): ~30 days.**
+
+### Risk-weighted outcome distribution (self-estimate)
+
+| Scenario | Prob | Headline-only days |
+|---|---|---|
+| Smooth — no scale mismatch, coord OK, finetune converges first try | 15% | 7 |
+| Normal — one risk triggers (coord bug, finetune tuning, or GPU OOM fallback) | 50% | 12–14 |
+| Scale mismatch — FlexHook `pos_avg_pool` spatial scales ≠ our temporal gaps, needs redesign of injection point | 25% | 18–21 |
+| Blow up — 38-A NEG, Exp 38 terminates early, pivot to appearance fusion | 10% | 5 + pivot |
+
+**Expected value ≈ 13 days headline-only.** Full ablation adds ~2 weeks on top.
+
+### Dominant schedule risks (ranked by impact)
+
+1. **FlexHook scale semantics.** `pos_avg_pool[i]` is **spatial** (28×84 / 14×42 / 7×21 grid), our `FRAME_GAPS={2,5,10}` are **temporal**. §3.2's "fine↔short, coarse↔long" mapping is an assumption without theoretical grounding. If mismatch hurts results, injection point needs redesign (possibly at `conditional_f` or `obj_f` cat layer, not at `speed`). **Cost: +3–5 days.**
+2. **FlexHook internal iterator keys.** Track ID and frame-index alignment between Temp-NeuralSORT outputs and FlexHook's dataloader batching needs reverse-engineering. **Cost: +1–2 days.**
+3. **Resolution mismatch.** FlexHook operates on 224×672 resize; our ORB runs on KITTI native 1242×375. Conversion `residual_velocity * 0.02` assumes unit img_dim; needs ratio-aware in extractor. **Cost: +1 day.**
+4. **6GB GPU OOM.** Free 6.2 GB current; batch 40 may OOM under fp16. Fallback batch 20 + grad accum doubles training time. **Cost: +1 day compute.**
+5. **Finetune instability.** `speed` distribution shift from raw → ego may destabilize from-checkpoint init. §8 warmup (2 ep zero-speed) mitigates but needs testing. **Cost: +1–2 days hyperparam sweep.**
+
+These risks are not serial — multiple can trigger simultaneously. Timeline estimate above assumes at most one triggers in the "normal" case.
 
 ---
 
