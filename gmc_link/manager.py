@@ -19,6 +19,7 @@ from .utils import (
 from .alignment import MotionLanguageAligner
 from .core import ORBHomographyEngine
 from .dataset import compute_per_track_extras
+from .ego.ego_router import EgoRouter, make_ego_router
 
 
 class GMCLinkManager:
@@ -42,6 +43,7 @@ class GMCLinkManager:
         device: str = "cpu",
         lang_dim: int = 384,
         frame_gap: int = 10,  # max gap for buffer sizing
+        ego_router: "EgoRouter | str | None" = None,
     ) -> None:
         self.device = device
         self.frame_gap = frame_gap
@@ -71,7 +73,12 @@ class GMCLinkManager:
                 self.aligner.load_state_dict(checkpoint)
         self.aligner.eval()
 
-        self.ego_engine = ORBHomographyEngine(max_features=1500)
+        if ego_router is None:
+            self.ego_engine = ORBHomographyEngine(max_features=1500)
+        elif isinstance(ego_router, str):
+            self.ego_engine = make_ego_router(ego_router)
+        else:
+            self.ego_engine = ego_router
         self.prev_frame = None
         self.prev_detections = None
 
