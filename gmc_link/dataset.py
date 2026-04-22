@@ -136,6 +136,7 @@ EXTRA_FEATURE_DIMS = {
     "accel_multiscale": 6,   # exp36a: (dx,dy) × {2,5,10} second-order diff
     "heading_sincos": 6,     # exp36a: (sin,cos) × {2,5,10} heading
     "ego_velocity_concat": 2,  # exp37 stage C: EMAP-style ego (vx, vy) structural conditioning
+    "omf_stats": 15,           # exp37 stage B: per-bbox OMF pooling × 3 scales
 }
 
 
@@ -147,7 +148,8 @@ def compute_extra_dims(extra_features):
 
 
 def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0,
-                             ego_dy_m=0.0, accel_per_scale=None):
+                             ego_dy_m=0.0, accel_per_scale=None,
+                             omf_stats_per_scale=None):
     """
     Compute per-track extra features (F1-F4) from existing velocity data.
 
@@ -158,6 +160,10 @@ def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0,
         accel_per_scale: optional [(ax_s, ay_s), (ax_m, ay_m), (ax_l, ay_l)]
             with true temporal acceleration (v_k[t] - v_k[t-k])/k per scale.
             If None and accel_multiscale requested, zeros are emitted.
+        omf_stats_per_scale: optional sequence of 3 arrays of length 5 each
+            (one per FRAME_GAPS scale) produced by
+            ``gmc_link.features.omf_stats.per_bbox_omf_stats``. If None and
+            ``omf_stats`` requested, zeros are emitted.
 
     Returns:
         list of float values to append to the base 13D vector
@@ -198,6 +204,17 @@ def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0,
             # signal as the older F4 "ego_motion" channel; distinct name marks
             # intent as structural conditioning (EMAP) for the Stage C memo.
             extras.extend([ego_dx_m, ego_dy_m])
+        elif feat == "omf_stats":
+            # Exp 37 Stage B: per-bbox OMF [mean_dx, mean_dy, std_dx, std_dy,
+            # max_mag] × 3 FRAME_GAPS scales. Zero-fill when dense flow is
+            # unavailable so the vector layout stays consistent; the Stage B
+            # runner must populate ``omf_stats_per_scale`` before training to
+            # exercise the feature.
+            if omf_stats_per_scale is None:
+                extras.extend([0.0] * 15)
+            else:
+                for scale_stats in omf_stats_per_scale:
+                    extras.extend(float(v) for v in scale_stats)
         # F5-F9 are relational — handled separately
 
     return extras
