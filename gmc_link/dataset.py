@@ -135,6 +135,7 @@ EXTRA_FEATURE_DIMS = {
     "track_density": 1,      # F9: density of nearby tracks
     "accel_multiscale": 6,   # exp36a: (dx,dy) × {2,5,10} second-order diff
     "heading_sincos": 6,     # exp36a: (sin,cos) × {2,5,10} heading
+    "ego_velocity_concat": 2,  # exp37 stage C: EMAP-style ego (vx, vy) structural conditioning
 }
 
 
@@ -192,6 +193,11 @@ def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0,
                 theta = np.arctan2(dy, dx)
                 extras.append(float(np.sin(theta)))
                 extras.append(float(np.cos(theta)))
+        elif feat == "ego_velocity_concat":
+            # Exp 37 Stage C: mid-scale ego translation (vx, vy). Same upstream
+            # signal as the older F4 "ego_motion" channel; distinct name marks
+            # intent as structural conditioning (EMAP) for the Stage C memo.
+            extras.extend([ego_dx_m, ego_dy_m])
         # F5-F9 are relational — handled separately
 
     return extras
