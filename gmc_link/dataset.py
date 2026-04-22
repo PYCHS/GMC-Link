@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 
 from gmc_link.utils import VELOCITY_SCALE, warp_points
 from gmc_link.core import ORBHomographyEngine
+from gmc_link.ego.ego_router import make_ego_router
 
 HOMOGRAPHY_CACHE = {}
 
@@ -31,8 +32,15 @@ CACHE_DIR = os.path.abspath(
 def _build_cache_key(
     data_root, sequences, frame_gaps, frame_shape,
     use_group_labels, extra_features, seq_len, text_encoder_name="all-MiniLM-L6-v2",
+    ego_router_name="orb",
 ):
-    """Deterministic hash of everything that affects build_training_data output."""
+    """Deterministic hash of everything that affects build_training_data output.
+
+    Note: when ``ego_router_name == "orb"`` (the historic default), the ego
+    field is intentionally omitted from the hash so that existing ORB-built
+    caches continue to hit. Any non-ORB backend (e.g. ``"recoverpose"``) adds
+    the field explicitly, producing a distinct hash.
+    """
     key_obj = {
         "version": CACHE_VERSION,
         "data_root": os.path.abspath(data_root),
@@ -44,6 +52,8 @@ def _build_cache_key(
         "seq_len": int(seq_len),
         "text_encoder": str(text_encoder_name),
     }
+    if ego_router_name and ego_router_name != "orb":
+        key_obj["ego_router"] = str(ego_router_name)
     key_str = json.dumps(key_obj, sort_keys=True)
     key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:16]
     return key_hash, key_obj
@@ -1009,6 +1019,7 @@ def build_training_data(
     use_group_labels: bool = False,
     extra_features: List[str] = None,
     seq_len: int = 0,
+    ego_router_name: str = "orb",
 ) -> Tuple:
     """
     Build (motion, language, expression_id) training triples for contrastive learning.
@@ -1029,6 +1040,7 @@ def build_training_data(
         data_root, sequences, frame_gaps, frame_shape,
         use_group_labels, extra_features, seq_len,
         text_encoder_name=encoder_name,
+        ego_router_name=ego_router_name,
     )
     if use_cache:
         cached = _try_load_cache(cache_key, seq_len)
@@ -1041,8 +1053,8 @@ def build_training_data(
         data_root, sequences, text_encoder
     )
 
-    print("  Initializing ORBHomographyEngine for dataset ego-motion compensation...")
-    orb_engine = ORBHomographyEngine(max_features=1500)
+    print(f"  Initializing '{ego_router_name}' ego router for dataset ego-motion compensation...")
+    orb_engine = make_ego_router(ego_router_name)
 
     print(
         "  Computing centroid-difference velocities and generating positive pairs..."

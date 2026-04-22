@@ -102,6 +102,7 @@ def setup_data(
     extra_features: list = None,
     seq_len: int = 0,
     text_encoder_name: str = "all-MiniLM-L6-v2",
+    ego_router_name: str = "orb",
 ) -> Optional[DataLoader]:
     """
     Initialize text encoder, build training dataset, and return a DataLoader.
@@ -134,6 +135,7 @@ def setup_data(
             use_group_labels=use_group_labels,
             extra_features=extra_features,
             seq_len=seq_len,
+            ego_router_name=ego_router_name,
         )
         if seq_len > 0:
             seq_motion, seq_masks, seq_language, seq_labels = result
@@ -348,6 +350,7 @@ def _run_single_stage(
     loss_name: str = "infonce",
     beta: float = 1.0,
     text_encoder_name: str = "all-MiniLM-L6-v2",
+    ego_router_name: str = "orb",
 ) -> None:
     """Run a single training stage."""
     if loss_name == "hninfo" and use_group_labels:
@@ -360,7 +363,8 @@ def _run_single_stage(
                             use_group_labels=use_group_labels,
                             extra_features=extra_features,
                             seq_len=seq_len if architecture == "temporal_transformer" else 0,
-                            text_encoder_name=text_encoder_name)
+                            text_encoder_name=text_encoder_name,
+                            ego_router_name=ego_router_name)
     if dataloader is None:
         print("ERROR: No training data found.")
         return
@@ -436,6 +440,8 @@ def main() -> None:
     parser.add_argument("--text-encoder", default="all-MiniLM-L6-v2",
                         help="Sentence-transformers model for language embeddings "
                              "(default: all-MiniLM-L6-v2; e.g., BAAI/bge-base-en-v1.5)")
+    parser.add_argument("--ego", default="orb", choices=["orb", "recoverpose"],
+                        help="Ego-motion source for dataset cache building (Exp 37 Stage A)")
     args = parser.parse_args()
 
     if args.stage == "curriculum" and args.loss == "hninfo":
@@ -508,6 +514,7 @@ def main() -> None:
             extra_features=extra_features,
             architecture=args.architecture, seq_len=args.seq_len,
             text_encoder_name=args.text_encoder,
+            ego_router_name=args.ego,
         )
 
         stage2_lr = args.lr * 0.1
@@ -521,6 +528,7 @@ def main() -> None:
             extra_features=extra_features,
             architecture=args.architecture, seq_len=args.seq_len,
             text_encoder_name=args.text_encoder,
+            ego_router_name=args.ego,
         )
         return
 
@@ -548,6 +556,7 @@ def main() -> None:
         architecture=args.architecture, seq_len=args.seq_len,
         loss_name=args.loss, beta=args.beta,
         text_encoder_name=args.text_encoder,
+        ego_router_name=args.ego,
     )
 
 
