@@ -15,9 +15,21 @@ class AlignmentLoss(nn.Module):
     Applied symmetrically: motion→language + language→motion.
     """
 
-    def __init__(self, temperature: float = 0.07):
+    def __init__(self, temperature: float = 0.07, learnable: bool = False):
         super().__init__()
-        self.temperature = temperature
+        if learnable:
+            # Store as log(1/τ) so exp gives 1/τ, keeping τ positive
+            import math
+            self.log_inv_temp = nn.Parameter(torch.tensor(math.log(1.0 / temperature)))
+        else:
+            self.log_inv_temp = None
+        self._init_temperature = temperature
+
+    @property
+    def temperature(self):
+        if self.log_inv_temp is not None:
+            return 1.0 / self.log_inv_temp.exp().item()
+        return self._init_temperature
 
     def forward(self, sim_matrix, sentence_ids=None):
         """
@@ -31,7 +43,10 @@ class AlignmentLoss(nn.Module):
         B = sim_matrix.size(0)
         device = sim_matrix.device
 
-        logits = sim_matrix / self.temperature
+        if self.log_inv_temp is not None:
+            logits = sim_matrix * self.log_inv_temp.exp()  # sim * (1/τ)
+        else:
+            logits = sim_matrix / self._init_temperature
 
         # Targets: diagonal pairs are positives
         targets = torch.arange(B, device=device)

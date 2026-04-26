@@ -6,7 +6,7 @@ AUC = probability that a randomly chosen GT-matching track gets a higher cosine 
 ## Headline
 - Mean AUC (micro, pooled across 3 seqs): **0.779** (over 33 expressions)
 - Mean AUC (macro, per-seq averaged):     **0.838** ± 0.064 (over 12 expressions in ≥2 seqs)
-- Seq-0011 only (legacy, for continuity): **0.779**
+- Seq-0011 only (legacy, for continuity): **—**
 
 ## Per-expression breakdown
 | Expression | 0005 | 0011 | 0013 | macro μ ± σ | micro | GT counts |
