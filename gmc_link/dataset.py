@@ -41,9 +41,31 @@ def _load_omf_field(ego_router_name: str, seq: str, frame_id: int, gap: int) -> 
         return None
 
 
+@lru_cache(maxsize=1024)
+def _load_orb_grid_field(seq: str, frame_id: int, gap: int, n_rows: int, n_cols: int) -> np.ndarray:
+    """Load a precomputed per-cell ORB-keypoint grid flow (Exp 37 zoned-orb).
+
+    Path: cache/orb_grid/<n_rows>x<n_cols>/<seq>/<frame:06d>_gap<gap>.npz
+    Returns a flat float32 array of length n_rows*n_cols*2 (row-major,
+    [median_dx, median_dy] per cell), or None if the file is missing.
+    """
+    path = os.path.join(
+        "cache", "orb_grid", f"{n_rows}x{n_cols}", seq,
+        f"{int(frame_id):06d}_gap{int(gap)}.npz",
+    )
+    if not os.path.exists(path):
+        return None
+    try:
+        with np.load(path) as npz:
+            return np.asarray(npz["flow"], dtype=np.float32)
+    except Exception:
+        return None
+
+
 def _omf_cache_reset():
     """Clear the flow-field LRU. Call between sequences to bound peak RSS."""
     _load_omf_field.cache_clear()
+    _load_orb_grid_field.cache_clear()
 
 # Multi-scale frame gaps for temporal velocity features
 FRAME_GAPS = [2, 5, 10]  # short, mid, long
@@ -165,6 +187,9 @@ EXTRA_FEATURE_DIMS = {
     "heading_sincos": 6,     # exp36a: (sin,cos) × {2,5,10} heading
     "ego_velocity_concat": 2,  # exp37 stage C: EMAP-style ego (vx, vy) structural conditioning
     "omf_stats": 15,           # exp37 stage B: per-bbox OMF pooling × 3 scales
+    "zoned_flow_2x2": 8,       # exp37 zoned: 2x2 grid Farneback flow mean(dx,dy) per cell × 4 cells (gap=5 only)
+    "zoned_flow_3x8": 48,      # exp37 zoned: 3x8 grid Farneback flow mean(dx,dy) per cell × 24 cells (gap=5 only)
+    "zoned_orb_flow_3x8": 48,  # exp37 zoned-orb: 3x8 grid ORB-keypoint median(dx,dy) per cell × 24 cells (gap=5 only)
 }
 
 
@@ -175,9 +200,84 @@ def compute_extra_dims(extra_features):
     return sum(EXTRA_FEATURE_DIMS[f] for f in extra_features)
 
 
+def compute_zoned_flow_features(flow_field: np.ndarray, n_grid: int = 2) -> np.ndarray:
+    """Pool an optical-flow field into an n_grid × n_grid grid of mean (dx, dy).
+
+    Returns a flat float32 vector of length n_grid² × 2.
+    Order is row-major: top-left, top-right, bottom-left, bottom-right (for n_grid=2).
+    Per cell: [mean_dx, mean_dy].
+
+    If ``flow_field`` is None or empty, returns zeros of the correct length.
+    """
+    n_dims = n_grid * n_grid * 2
+    if flow_field is None:
+        return np.zeros(n_dims, dtype=np.float32)
+    if flow_field.ndim != 3 or flow_field.shape[2] != 2:
+        return np.zeros(n_dims, dtype=np.float32)
+
+    H, W, _ = flow_field.shape
+    if H == 0 or W == 0:
+        return np.zeros(n_dims, dtype=np.float32)
+
+    out = np.zeros(n_dims, dtype=np.float32)
+    row_edges = np.linspace(0, H, n_grid + 1, dtype=int)
+    col_edges = np.linspace(0, W, n_grid + 1, dtype=int)
+
+    idx = 0
+    for r in range(n_grid):
+        for c in range(n_grid):
+            r0, r1 = row_edges[r], row_edges[r + 1]
+            c0, c1 = col_edges[c], col_edges[c + 1]
+            if r1 <= r0 or c1 <= c0:
+                idx += 2
+                continue
+            cell = flow_field[r0:r1, c0:c1, :]
+            out[idx] = float(cell[..., 0].mean())
+            out[idx + 1] = float(cell[..., 1].mean())
+            idx += 2
+
+    return out
+
+
+def compute_zoned_flow_features_rect(flow_field: np.ndarray, n_rows: int, n_cols: int) -> np.ndarray:
+    """Pool flow into n_rows × n_cols grid of mean (dx, dy).
+
+    Row-major order: row 0 cells left-to-right, then row 1, ...
+    Per cell: [mean_dx, mean_dy]. Returns flat float32 length n_rows*n_cols*2.
+
+    For KITTI 1242×375 frames at 3×8 → cells ≈ 155×125 pixels (1.24:1 aspect),
+    aligning lane-grain horizontal partitioning with sky/object/road tiers.
+    """
+    n_dims = n_rows * n_cols * 2
+    if flow_field is None or flow_field.ndim != 3 or flow_field.shape[2] != 2:
+        return np.zeros(n_dims, dtype=np.float32)
+    H, W, _ = flow_field.shape
+    if H == 0 or W == 0:
+        return np.zeros(n_dims, dtype=np.float32)
+    out = np.zeros(n_dims, dtype=np.float32)
+    row_edges = np.linspace(0, H, n_rows + 1, dtype=int)
+    col_edges = np.linspace(0, W, n_cols + 1, dtype=int)
+    idx = 0
+    for r in range(n_rows):
+        for c in range(n_cols):
+            r0, r1 = row_edges[r], row_edges[r + 1]
+            c0, c1 = col_edges[c], col_edges[c + 1]
+            if r1 <= r0 or c1 <= c0:
+                idx += 2
+                continue
+            cell = flow_field[r0:r1, c0:c1, :]
+            out[idx]     = float(cell[..., 0].mean())
+            out[idx + 1] = float(cell[..., 1].mean())
+            idx += 2
+    return out
+
+
 def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0,
                              ego_dy_m=0.0, accel_per_scale=None,
-                             omf_stats_per_scale=None):
+                             omf_stats_per_scale=None,
+                             zoned_flow_2x2_vec=None,
+                             zoned_flow_3x8_vec=None,
+                             zoned_orb_flow_3x8_vec=None):
     """
     Compute per-track extra features (F1-F4) from existing velocity data.
 
@@ -243,6 +343,36 @@ def compute_per_track_extras(extra_features, scale_velocities, ego_dx_m=0.0,
             else:
                 for scale_stats in omf_stats_per_scale:
                     extras.extend(float(v) for v in scale_stats)
+        elif feat == "zoned_flow_2x2":
+            # Exp 37 zoned-flow: 2×2 grid Farneback flow mean(dx, dy) per cell.
+            # Frame-level feature broadcast to every track at the same frame.
+            # Cell order: top-left, top-right, bottom-left, bottom-right (8D).
+            # Flow precomputed at gap=5 (mid scale) only.
+            if zoned_flow_2x2_vec is None:
+                extras.extend([0.0] * 8)
+            else:
+                extras.extend(float(v) for v in zoned_flow_2x2_vec)
+        elif feat == "zoned_flow_3x8":
+            # Exp 37 zoned-flow: 3×8 grid Farneback flow mean(dx, dy) per cell.
+            # Frame-level feature broadcast to every track at the same frame.
+            # Row-major: row0 left→right, row1 left→right, row2 left→right (48D).
+            # KITTI 1242×375 → cells ≈155×125 (near-square, lane-grain).
+            # Flow precomputed at gap=5 (mid scale) only.
+            if zoned_flow_3x8_vec is None:
+                extras.extend([0.0] * 48)
+            else:
+                extras.extend(float(v) for v in zoned_flow_3x8_vec)
+        elif feat == "zoned_orb_flow_3x8":
+            # Exp 37 zoned-orb: 3×8 grid ORB-keypoint median(dx, dy) per cell.
+            # Same layout as ``zoned_flow_3x8`` (48D row-major), but the source
+            # is per-cell median over Lowe-ratio-filtered ORB matches between
+            # frame f and frame f+5, instead of per-cell mean Farneback flow.
+            # Hypothesis: sparse ORB + outlier rejection cleaner than dense
+            # Farneback on KITTI's textureless asphalt.
+            if zoned_orb_flow_3x8_vec is None:
+                extras.extend([0.0] * 48)
+            else:
+                extras.extend(float(v) for v in zoned_orb_flow_3x8_vec)
         # F5-F9 are relational — handled separately
 
     return extras
@@ -834,7 +964,9 @@ def _generate_positive_pairs(
     per_track_feats = [f for f in (extra_features or [])
                        if f in ("speed_m", "heading_m", "accel", "ego_motion",
                                 "accel_multiscale", "heading_sincos",
-                                "ego_velocity_concat", "omf_stats")]
+                                "ego_velocity_concat", "omf_stats",
+                                "zoned_flow_2x2", "zoned_flow_3x8",
+                                "zoned_orb_flow_3x8")]
     relational_feats = [f for f in (extra_features or [])
                         if f in ("neighbor_mean_vel", "velocity_rank", "heading_diff",
                                  "nn_dist", "track_density")]
@@ -848,6 +980,18 @@ def _generate_positive_pairs(
 
     needs_accel_multiscale = "accel_multiscale" in per_track_feats
     needs_omf_stats = "omf_stats" in per_track_feats
+    needs_zoned_flow = "zoned_flow_2x2" in per_track_feats
+    needs_zoned_flow_3x8 = "zoned_flow_3x8" in per_track_feats
+    needs_zoned_orb_3x8 = "zoned_orb_flow_3x8" in per_track_feats
+    # Frame-level cache: {frame_id: zoned_flow_2x2_vec (8D)}; computed lazily
+    # from the precomputed Farneback gap=5 .npz under cache/omf/<ego>/<seq>/.
+    zoned_flow_cache = {} if needs_zoned_flow else None
+    # Frame-level cache: {frame_id: zoned_flow_3x8_vec (48D)}; same lazy load,
+    # same gap=5 source — pooled at a denser 3×8 grid (lane-grain horizontal).
+    zoned_flow_3x8_cache = {} if needs_zoned_flow_3x8 else None
+    # Frame-level cache: {frame_id: zoned_orb_flow_3x8_vec (48D)}; loaded from
+    # cache/orb_grid/3x8/<seq>/ (precomputed via precompute_orb_grid_3x8.py).
+    zoned_orb_3x8_cache = {} if needs_zoned_orb_3x8 else None
 
     for tid, centroids in track_centroids.items():
         track_start_idx = len(motion_data)
@@ -919,6 +1063,44 @@ def _generate_positive_pairs(
                     else:
                         omf_stats_per_scale.append(per_bbox_omf_stats(flow, bbox_px))
 
+            # Exp 37 zoned-flow: 2x2 grid pooled Farneback flow at gap=5 only.
+            # One 8D vector per frame, broadcast to every track at that frame.
+            zoned_flow_vec = None
+            if needs_zoned_flow and seq is not None:
+                if curr_fid in zoned_flow_cache:
+                    zoned_flow_vec = zoned_flow_cache[curr_fid]
+                else:
+                    flow = _load_omf_field(ego_router_name, seq, curr_fid, 5)
+                    zoned_flow_vec = compute_zoned_flow_features(flow, n_grid=2)
+                    zoned_flow_cache[curr_fid] = zoned_flow_vec
+
+            # Exp 37 zoned-flow: 3x8 grid pooled Farneback flow at gap=5 only.
+            # One 48D vector per frame, broadcast to every track at that frame.
+            zoned_flow_3x8_vec = None
+            if needs_zoned_flow_3x8 and seq is not None:
+                if curr_fid in zoned_flow_3x8_cache:
+                    zoned_flow_3x8_vec = zoned_flow_3x8_cache[curr_fid]
+                else:
+                    flow = _load_omf_field(ego_router_name, seq, curr_fid, 5)
+                    zoned_flow_3x8_vec = compute_zoned_flow_features_rect(
+                        flow, n_rows=3, n_cols=8
+                    )
+                    zoned_flow_3x8_cache[curr_fid] = zoned_flow_3x8_vec
+
+            # Exp 37 zoned-orb: 3x8 grid per-cell ORB-keypoint median motion
+            # at gap=5 only. One 48D vector per frame, broadcast to every track
+            # at that frame. Loaded from precomputed cache/orb_grid/3x8/.
+            zoned_orb_flow_3x8_vec = None
+            if needs_zoned_orb_3x8 and seq is not None:
+                if curr_fid in zoned_orb_3x8_cache:
+                    zoned_orb_flow_3x8_vec = zoned_orb_3x8_cache[curr_fid]
+                else:
+                    v = _load_orb_grid_field(seq, curr_fid, 5, 3, 8)
+                    if v is None:
+                        v = np.zeros(48, dtype=np.float32)
+                    zoned_orb_flow_3x8_vec = v
+                    zoned_orb_3x8_cache[curr_fid] = v
+
             # dw, dh from primary scale (mid)
             primary_future_j = _find_future_frame(sorted_frames, i, frame_gaps[primary_gap_idx])
             if primary_future_j is not None:
@@ -961,6 +1143,9 @@ def _generate_positive_pairs(
                 ego_dx_m=ego_dx_m, ego_dy_m=ego_dy_m,
                 accel_per_scale=accel_per_scale,
                 omf_stats_per_scale=omf_stats_per_scale,
+                zoned_flow_2x2_vec=zoned_flow_vec,
+                zoned_flow_3x8_vec=zoned_flow_3x8_vec,
+                zoned_orb_flow_3x8_vec=zoned_orb_flow_3x8_vec,
             ))
 
             # Store for relational feature computation

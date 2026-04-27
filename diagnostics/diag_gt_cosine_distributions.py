@@ -88,13 +88,17 @@ def precompute_homographies(frame_dir, all_frame_ids, orb_engine):
 
 def compute_motion_vectors_for_all_tracks(
     all_track_centroids, active_frame_ids, homography_cache, frame_shape,
-    extra_features=None,
+    extra_features=None, seq=None,
 ):
     """
     Compute motion vectors for ALL tracks at ALL active frames in one pass.
     Returns dict: {track_id: [(frame_id, motion_vector), ...]}
     """
-    from gmc_link.dataset import compute_per_track_extras, compute_relational_extras
+    from gmc_link.dataset import (
+        compute_per_track_extras, compute_relational_extras,
+        compute_zoned_flow_features, compute_zoned_flow_features_rect,
+        _load_omf_field, _load_orb_grid_field,
+    )
 
     h, w = frame_shape
     sorted_active = sorted(active_frame_ids)
@@ -104,7 +108,9 @@ def compute_motion_vectors_for_all_tracks(
     per_track_feats = [f for f in (extra_features or [])
                        if f in ("speed_m", "heading_m", "accel", "ego_motion",
                                 "accel_multiscale", "heading_sincos",
-                                "ego_velocity_concat", "omf_stats")]
+                                "ego_velocity_concat", "omf_stats",
+                                "zoned_flow_2x2", "zoned_flow_3x8",
+                                "zoned_orb_flow_3x8")]
     relational_feats = [f for f in (extra_features or [])
                         if f in ("neighbor_mean_vel", "velocity_rank", "heading_diff",
                                  "nn_dist", "track_density")]
@@ -114,6 +120,12 @@ def compute_motion_vectors_for_all_tracks(
     frame_track_data = {}
 
     needs_accel_multiscale = "accel_multiscale" in per_track_feats
+    needs_zoned_flow = "zoned_flow_2x2" in per_track_feats
+    needs_zoned_flow_3x8 = "zoned_flow_3x8" in per_track_feats
+    needs_zoned_orb_3x8 = "zoned_orb_flow_3x8" in per_track_feats
+    zoned_flow_cache = {} if needs_zoned_flow else None
+    zoned_flow_3x8_cache = {} if needs_zoned_flow_3x8 else None
+    zoned_orb_3x8_cache = {} if needs_zoned_orb_3x8 else None
 
     for tid, centroids in all_track_centroids.items():
         results = []
@@ -208,11 +220,45 @@ def compute_motion_vectors_for_all_tracks(
                             ))
                 track_scale_vels[curr_fid] = list(scale_velocities)
 
+            zoned_flow_vec = None
+            if needs_zoned_flow and seq is not None:
+                if curr_fid in zoned_flow_cache:
+                    zoned_flow_vec = zoned_flow_cache[curr_fid]
+                else:
+                    flow = _load_omf_field("orb", seq, curr_fid, 5)
+                    zoned_flow_vec = compute_zoned_flow_features(flow, n_grid=2)
+                    zoned_flow_cache[curr_fid] = zoned_flow_vec
+
+            zoned_flow_3x8_vec = None
+            if needs_zoned_flow_3x8 and seq is not None:
+                if curr_fid in zoned_flow_3x8_cache:
+                    zoned_flow_3x8_vec = zoned_flow_3x8_cache[curr_fid]
+                else:
+                    flow = _load_omf_field("orb", seq, curr_fid, 5)
+                    zoned_flow_3x8_vec = compute_zoned_flow_features_rect(
+                        flow, n_rows=3, n_cols=8
+                    )
+                    zoned_flow_3x8_cache[curr_fid] = zoned_flow_3x8_vec
+
+            zoned_orb_flow_3x8_vec = None
+            if needs_zoned_orb_3x8 and seq is not None:
+                if curr_fid in zoned_orb_3x8_cache:
+                    zoned_orb_flow_3x8_vec = zoned_orb_3x8_cache[curr_fid]
+                else:
+                    v = _load_orb_grid_field(seq, curr_fid, 5, 3, 8)
+                    if v is None:
+                        v = np.zeros(48, dtype=np.float32)
+                    zoned_orb_flow_3x8_vec = v
+                    zoned_orb_3x8_cache[curr_fid] = v
+
             if per_track_feats:
                 base_vec.extend(compute_per_track_extras(
                     per_track_feats, scale_velocities,
                     ego_dx_m=ego_dx_m, ego_dy_m=ego_dy_m,
                     accel_per_scale=accel_per_scale,
+                    zoned_flow_2x2_vec=zoned_flow_vec,
+                    zoned_flow_3x8_vec=zoned_flow_3x8_vec,
+                    zoned_orb_flow_3x8_vec=zoned_orb_flow_3x8_vec,
                 ))
 
             # Store mid-scale data for relational post-pass
@@ -344,7 +390,7 @@ def main():
     print("Computing motion vectors for all tracks...")
     track_motion_vecs = compute_motion_vectors_for_all_tracks(
         all_track_centroids, set(all_frame_ids), homography_cache, frame_shape,
-        extra_features=extra_features,
+        extra_features=extra_features, seq=args.seq,
     )
     print(f"  Tracks with motion vectors: {len(track_motion_vecs)}")
 
