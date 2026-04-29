@@ -42,27 +42,47 @@ class _Track:
 
 
 def _load_ns_tracks(video):
-    """Return dict[frame_id: int][obj_id: int] = (x,y,w,h) merged car+pedestrian."""
+    """Return (out, info) where:
+      out  = dict[frame_id: int][obj_id: int] = (x,y,w,h) merged car+pedestrian.
+      info = {"car_rows": int, "ped_rows": int,
+              "car_state": "ok"|"missing"|"empty",
+              "ped_state": "ok"|"missing"|"empty"}.
+    """
     out = defaultdict(dict)
     car = os.path.join(NS_ROOT, video, "car", "predict.txt")
     ped = os.path.join(NS_ROOT, video, "pedestrian", "predict.txt")
+    info = {"car_rows": 0, "ped_rows": 0, "car_state": "missing", "ped_state": "missing"}
     max_car = 0
-    if os.path.exists(car) and os.path.getsize(car) > 0:
-        rows = np.loadtxt(car, delimiter=",", ndmin=2)
-        for r in rows:
-            fid, oid, x, y, w, h = int(r[0]), int(r[1]), r[2], r[3], r[4], r[5]
-            out[fid][oid] = (x, y, w, h)
-            max_car = max(max_car, oid)
-    if os.path.exists(ped) and os.path.getsize(ped) > 0:
-        rows = np.loadtxt(ped, delimiter=",", ndmin=2)
-        for r in rows:
-            fid, oid, x, y, w, h = int(r[0]), int(r[1]) + max_car, r[2], r[3], r[4], r[5]
-            out[fid][oid] = (x, y, w, h)
-    return out
+    if os.path.exists(car):
+        if os.path.getsize(car) > 0:
+            rows = np.loadtxt(car, delimiter=",", ndmin=2)
+            for r in rows:
+                fid, oid, x, y, w, h = int(r[0]), int(r[1]), r[2], r[3], r[4], r[5]
+                out[fid][oid] = (x, y, w, h)
+                max_car = max(max_car, oid)
+            info["car_rows"] = int(rows.shape[0])
+            info["car_state"] = "ok"
+        else:
+            info["car_state"] = "empty"
+    if os.path.exists(ped):
+        if os.path.getsize(ped) > 0:
+            rows = np.loadtxt(ped, delimiter=",", ndmin=2)
+            for r in rows:
+                fid, oid, x, y, w, h = int(r[0]), int(r[1]) + max_car, r[2], r[3], r[4], r[5]
+                out[fid][oid] = (x, y, w, h)
+            info["ped_rows"] = int(rows.shape[0])
+            info["ped_state"] = "ok"
+        else:
+            info["ped_state"] = "empty"
+    return out, info
 
 
 def _process_video(video, manager):
-    tracks_per_frame = _load_ns_tracks(video)
+    tracks_per_frame, info = _load_ns_tracks(video)
+    print(
+        f"  [{video}] car={info['car_rows']} rows ({info['car_state']}), "
+        f"ped={info['ped_rows']} rows ({info['ped_state']})"
+    )
     if not tracks_per_frame:
         print(f"  [{video}] no tracks, skip")
         return {}
