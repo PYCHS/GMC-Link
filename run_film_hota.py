@@ -91,23 +91,27 @@ def run_cascade_inference_with_film(ckpt_path, target_seqs):
 
     dl = get_dataloader("test", opt, "Track_Dataset")
     OUT = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
-    with torch.no_grad():
-        for batch in tqdm(dl, desc="cascade-FiLM inference"):
-            inputs = dict(
-                local_img=batch["cropped_images"].to(device),
-                global_img=batch["global_images"].to(device),
-                exp=tokenize(batch["expression_new"]).to(device),
-                motion_13d=batch["motion_13d"].to(device),
-            )
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
-                logits = model(inputs)["logits"].cpu()
-            for idx in range(len(batch["video"])):
-                for fid in range(int(batch["start_frame"][idx]),
-                                 int(batch["stop_frame"][idx]) + 1):
-                    OUT[batch["video"][idx]][int(batch["obj_id"][idx])][fid][
-                        batch["expression_raw"][idx]
-                    ].append(logits[idx].item())
-    ikun_utils.VIDEOS.update(_orig)
+    try:
+        with torch.no_grad():
+            for batch in tqdm(dl, desc="cascade-FiLM inference"):
+                inputs = dict(
+                    local_img=batch["cropped_images"].to(device),
+                    global_img=batch["global_images"].to(device),
+                    exp=tokenize(batch["expression_new"]).to(device),
+                    motion_13d=batch["motion_13d"].to(device),
+                )
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    logits = model(inputs)["logits"]
+                logits = logits.cpu()
+                for idx in range(len(batch["video"])):
+                    for fid in range(int(batch["start_frame"][idx]),
+                                     int(batch["stop_frame"][idx]) + 1):
+                        OUT[batch["video"][idx]][int(batch["obj_id"][idx])][fid][
+                            batch["expression_raw"][idx]
+                        ].append(logits[idx].item())
+    finally:
+        ikun_utils.VIDEOS.clear()
+        ikun_utils.VIDEOS.update(_orig)
     return OUT
 
 
@@ -152,7 +156,8 @@ def gen_predict(seq, simcalib_bias, ns, exprs, run_dir, raw_logits_per_seq):
             if lines: f.write("\n")
         seqmap.append(f"{seq}+{expr}")
     sm_path = os.path.join(run_dir, "seqmap.txt")
-    open(sm_path, "w").write("\n".join(seqmap) + "\n")
+    with open(sm_path, "w") as f:
+        f.write("\n".join(seqmap) + "\n")
     return res_dir, sm_path
 
 
@@ -166,20 +171,26 @@ def run_te(seqmap, results_dir):
            "--GT_LOC_FORMAT", "{gt_folder}/{video_id}/{expression_id}/gt.txt",
            "--TRACKERS_TO_EVAL", os.path.abspath(results_dir),
            "--USE_PARALLEL", "False", "--PLOT_CURVES", "False", "--PRINT_CONFIG", "False"]
-    subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(TRACKEVAL))
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(TRACKEVAL))
     sp = os.path.join(results_dir, "pedestrian_summary.txt")
-    if not os.path.exists(sp): return None, None
-    pooled = float(open(sp).read().splitlines()[1].split()[0])
+    if not os.path.exists(sp):
+        sys.stderr.write(f"[run_te] TrackEval rc={proc.returncode}, no summary at {sp}\n")
+        if proc.stderr:
+            sys.stderr.write(proc.stderr[-2000:] + "\n")
+        return None, None
+    with open(sp) as f:
+        pooled = float(f.read().splitlines()[1].split()[0])
     csv_p = os.path.join(results_dir, "pedestrian_detailed.csv")
     g = {"STATIC": [], "MOVING": [], "OTHER": []}
     cols = [f"HOTA___{a}" for a in [5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85]]
-    for r in csv.DictReader(open(csv_p)):
-        sx = r.get("seq", "")
-        if "+" not in sx: continue
-        e = sx.split("+", 1)[1]
-        vs = [float(r[c]) for c in cols if r.get(c) not in (None, "")]
-        h = (statistics.mean(vs) * 100) if vs else 0.0
-        g[classify(e)].append(h)
+    with open(csv_p) as f:
+        for r in csv.DictReader(f):
+            sx = r.get("seq", "")
+            if "+" not in sx: continue
+            e = sx.split("+", 1)[1]
+            vs = [float(r[c]) for c in cols if r.get(c) not in (None, "")]
+            h = (statistics.mean(vs) * 100) if vs else 0.0
+            g[classify(e)].append(h)
     per_class = {k: statistics.mean(v) if v else 0.0 for k, v in g.items()}
     return pooled, per_class
 
@@ -190,7 +201,8 @@ def main():
     p.add_argument("--seqs", nargs="+", default=["0005","0011","0013"])
     args = p.parse_args()
 
-    text_feat = json.load(open(TEXT_FEAT_JSON))
+    with open(TEXT_FEAT_JSON) as f:
+        text_feat = json.load(f)
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
 
     raw_logits = run_cascade_inference_with_film(args.ckpt, args.seqs)
