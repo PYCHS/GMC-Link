@@ -21,7 +21,7 @@ def warp_points(points: np.ndarray, homography: np.ndarray) -> np.ndarray:
         warped_points: (N, 2) array representing the warped (x', y') coordinates.
     """
     if points is None or len(points) == 0:
-        return np.empty((0, 2))  # Return an empty array if there are no points to warp
+        return np.empty((0, 2), dtype=np.float32)
 
     num_points = points.shape[0]
     homogeneous_points = np.hstack(
@@ -29,8 +29,12 @@ def warp_points(points: np.ndarray, homography: np.ndarray) -> np.ndarray:
     )  # Convert to homogeneous
     warped_homogeneous = homogeneous_points @ homography.T  # Apply homography
 
-    # Convert back to Cartesian coordinates
-    warped_points = warped_homogeneous[:, :2] / warped_homogeneous[:, 2:3]
+    # Convert back to Cartesian coordinates. Clamp |w| away from zero so that
+    # cumulative-homography drift cannot drive a centroid onto the line at
+    # infinity and inject NaN/Inf into the 13D motion vector.
+    w = warped_homogeneous[:, 2:3]
+    safe_w = np.where(np.abs(w) < 1e-8, np.copysign(1e-8, w), w)
+    warped_points = warped_homogeneous[:, :2] / safe_w
     return warped_points
 
 
