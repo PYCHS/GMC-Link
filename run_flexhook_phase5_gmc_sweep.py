@@ -24,6 +24,7 @@ TRACK_DIR    = "/home/seanachan/FlexHook/FlexHook/tracker_outputs/Temp-NeuralSOR
 DATA_ROOT    = "/home/seanachan/GMC-Link/refer-kitti"
 GT_TEMPLATE  = "/home/seanachan/FlexHook/datasets/refer-kitti/gt_template"
 _GMC_SUFFIX  = os.environ.get("GMC_SUFFIX", "")
+RAW_COS      = os.environ.get("GMC_RAW_COS", "0") == "1"  # Arm B: GMC cache contains raw cosine [-1,+1]
 GMC_CACHE_TPL= "/home/seanachan/GMC-Link/gmc_link/gmc_scores_flexhook_v1_{seq}" + _GMC_SUFFIX + "_cache.json"
 TRACKEVAL    = "/home/seanachan/TempRMOT/TrackEval/scripts/run_mot_challenge.py"
 _OUT_SUFFIX  = os.environ.get("OUT_SUFFIX", "")
@@ -123,22 +124,26 @@ def gen_predicts(cls_dict, tracks_by_seq, gmc_caches, alpha, gmc_scale, thr_moti
                     margin = float(score[1] - score[0])
 
                     cls = classify(expr_id)
+                    default = 0.0 if RAW_COS else 0.5
                     if cls == "STATIC" and scale_s != 0.0:
-                        gmc = gmc_seq.get(expr_id, {}).get(str(fid_pred), {}).get(str(oid_int), 0.5)
-                        bias = alpha_s * (gmc - 0.5) * scale_s
+                        gmc = gmc_seq.get(expr_id, {}).get(str(fid_pred), {}).get(str(oid_int), default)
+                        gmc_term = gmc if RAW_COS else (gmc - 0.5)
+                        bias = alpha_s * gmc_term * scale_s
                         thr = thr_s
                     elif cls == "MOVING" or cls == "STATIC":
                         # Preserve ship: STATIC inherits MOTION bias when scale_s=0
                         if alpha != 0.0:
-                            gmc = gmc_seq.get(expr_id, {}).get(str(fid_pred), {}).get(str(oid_int), 0.5)
-                            bias = alpha * (gmc - 0.5) * gmc_scale
+                            gmc = gmc_seq.get(expr_id, {}).get(str(fid_pred), {}).get(str(oid_int), default)
+                            gmc_term = gmc if RAW_COS else (gmc - 0.5)
+                            bias = alpha * gmc_term * gmc_scale
                         else:
                             bias = 0.0
                         thr = thr_motion
                     else:
                         if alpha_a != 0.0 and scale_a != 0.0:
-                            gmc = gmc_seq.get(expr_id, {}).get(str(fid_pred), {}).get(str(oid_int), 0.5)
-                            bias = alpha_a * (gmc - 0.5) * scale_a
+                            gmc = gmc_seq.get(expr_id, {}).get(str(fid_pred), {}).get(str(oid_int), default)
+                            gmc_term = gmc if RAW_COS else (gmc - 0.5)
+                            bias = alpha_a * gmc_term * scale_a
                         else:
                             bias = 0.0
                         thr = thr_a

@@ -62,6 +62,9 @@ class GMCLinkManager:
                 motion_dim = checkpoint.get("motion_dim", 13)
                 self.extra_features = checkpoint.get("extra_features") or []
                 self.temperature = checkpoint.get("temperature", 1.0)
+                ckpt_lang_dim = checkpoint.get("lang_dim")
+                if ckpt_lang_dim is not None:
+                    lang_dim = ckpt_lang_dim
 
         self.aligner = MotionLanguageAligner(
             motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256
@@ -103,6 +106,7 @@ class GMCLinkManager:
         language_embedding: torch.Tensor,
         detections: Optional[np.ndarray] = None,
         update_state: bool = True,
+        raw_cos: bool = False,
     ) -> Tuple[Dict[int, float], Dict[int, np.ndarray], Dict[int, float]]:
         """
         Process a frame: compute centroid-difference velocities per tracked object,
@@ -114,9 +118,12 @@ class GMCLinkManager:
             language_embedding: (1, L_dim) Tensor representing the language prompt.
             detections: (N, 4) array of bounding boxes for ego-motion masking.
             update_state: Whether to update internal state (for multiple evaluations per frame)
+            raw_cos: If True, scores_dict returns raw cosine in [-1, +1] (no sigmoid, no EMA).
+                     For Arm B fusion experiments where downstream uses raw cosine directly.
 
         Returns:
-            scores_dict: {track_id: smoothed alignment score} (sigmoid, EMA-smoothed)
+            scores_dict: {track_id: alignment score} — if raw_cos=False (default), sigmoid+EMA
+                         smoothed [0,1]; if raw_cos=True, raw cosine [-1,+1] (no smoothing).
             velocities_dict: {track_id: 13D motion vector}
             cosine_dict: {track_id: EMA-smoothed cosine similarity} (raw cosine, asymmetric EMA)
         """
@@ -352,7 +359,7 @@ class GMCLinkManager:
             else:
                 smoothed_score = self.score_buffer.peek(tid, raw_score)
                 smoothed_cosine = self.cosine_buffer.peek(tid, raw_cosine)
-            scores_dict[tid] = smoothed_score
+            scores_dict[tid] = raw_cosine if raw_cos else smoothed_score
             velocities_dict[tid] = compensated_velocities[i]
             cosine_dict[tid] = smoothed_cosine
 
