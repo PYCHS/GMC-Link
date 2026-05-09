@@ -244,3 +244,6 @@ diagnostics/results/multiseq/*.npz
 diagnostics/results/multiseq/*.png
 
 diagnostics/results/label_audit/*.mp4
+
+# Depth caches (build artifacts, ~330MB full)
+gmc_link/z_track_*_cache.json
