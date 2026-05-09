@@ -73,7 +73,9 @@ FRAME_GAPS = [2, 5, 10]  # short, mid, long
 # ── Training-data disk cache ─────────────────────────────────────────
 # Bump CACHE_VERSION whenever the build logic changes in a way that
 # affects output (feature layout, jitter, motion keywords, etc.).
-CACHE_VERSION = 1
+# v2 (2026-05-07): store per-expression class_id ('motion'|'static'|'appear')
+# alongside (motion, lang, labels) for anchor-mask mode (Tier B 1).
+CACHE_VERSION = 2
 CACHE_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "cache", "training_data")
 )
@@ -82,7 +84,8 @@ CACHE_DIR = os.path.abspath(
 def _build_cache_key(
     data_root, sequences, frame_gaps, frame_shape,
     use_group_labels, extra_features, seq_len, text_encoder_name="all-MiniLM-L6-v2",
-    ego_router_name="orb",
+    ego_router_name="orb", motion_filter="loose", class_filter="all",
+    use_depth=False,
 ):
     """Deterministic hash of everything that affects build_training_data output.
 
@@ -104,18 +107,35 @@ def _build_cache_key(
     }
     if ego_router_name and ego_router_name != "orb":
         key_obj["ego_router"] = str(ego_router_name)
+    if motion_filter and motion_filter != "loose":
+        key_obj["motion_filter"] = str(motion_filter)
+    if use_depth:
+        key_obj["use_depth"] = True
+    # NB: class_filter intentionally NOT in cache key. Anchor-mask mode keeps
+    # the full motion-filtered pool; only the loss anchor_mask depends on it.
+    # Same cached (motion, lang, labels, id_to_class) serves all class_filter values.
+    _ = class_filter
     key_str = json.dumps(key_obj, sort_keys=True)
     key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:16]
     return key_hash, key_obj
 
 
 def _try_load_cache(cache_key, seq_len):
-    """Return tuple of lists matching build_training_data's return contract, or None."""
+    """Return tuple matching build_training_data's return contract, or None.
+
+    Adds id_to_class as final element (CACHE_VERSION 2+). Falls through to None
+    on any cache miss including missing id_to_class (forces rebuild).
+    """
     cache_path = os.path.join(CACHE_DIR, f"{cache_key}.npz")
     if not os.path.exists(cache_path):
         return None
     try:
         data = np.load(cache_path, allow_pickle=False)
+        if "id_to_class" not in data.files:
+            # v1 cache without class metadata — invalidate to force rebuild
+            print(f"  [cache] {cache_path} missing id_to_class (v1) — invalidating")
+            return None
+        id_to_class = data["id_to_class"].astype(int).tolist()
         if seq_len > 0:
             sm = data["seq_motion"]
             mk = data["seq_masks"]
@@ -125,6 +145,7 @@ def _try_load_cache(cache_key, seq_len):
                 [mk[i] for i in range(mk.shape[0])],
                 [sl[i] for i in range(sl.shape[0])],
                 data["seq_labels"].astype(int).tolist(),
+                id_to_class,
             )
         md = data["motion_data"]
         ld = data["language_data"]
@@ -132,6 +153,7 @@ def _try_load_cache(cache_key, seq_len):
             [md[i] for i in range(md.shape[0])],
             [ld[i] for i in range(ld.shape[0])],
             data["labels"].astype(int).tolist(),
+            id_to_class,
         )
     except Exception as e:
         print(f"  [cache] failed to load {cache_path}: {e}")
@@ -145,7 +167,7 @@ def _save_cache(cache_key, key_obj, payload, seq_len):
     sidecar = os.path.join(CACHE_DIR, f"{cache_key}.json")
 
     if seq_len > 0:
-        seq_motion, seq_masks, seq_language, seq_labels = payload
+        seq_motion, seq_masks, seq_language, seq_labels, id_to_class = payload
         if not seq_motion:
             return
         arrays = {
@@ -153,15 +175,17 @@ def _save_cache(cache_key, key_obj, payload, seq_len):
             "seq_masks": np.stack(seq_masks),
             "seq_language": np.stack(seq_language),
             "seq_labels": np.array(seq_labels, dtype=np.int64),
+            "id_to_class": np.array(id_to_class, dtype=np.int64),
         }
     else:
-        motion_data, language_data, labels = payload
+        motion_data, language_data, labels, id_to_class = payload
         if not motion_data:
             return
         arrays = {
             "motion_data": np.stack(motion_data),
             "language_data": np.stack(language_data),
             "labels": np.array(labels, dtype=np.int64),
+            "id_to_class": np.array(id_to_class, dtype=np.int64),
         }
 
     np.savez(cache_path, **arrays)
@@ -451,18 +475,57 @@ def compute_relational_extras(extra_features, my_dx, my_dy, my_cx, my_cy,
     return extras
 
 
+class ClipFeatCache:
+    """In-RAM (seq, frame, track) → 512D fp32 lookup, built from .npz."""
+
+    def __init__(self, npz_path: str):
+        with np.load(npz_path) as data:
+            self._d = {k: np.asarray(data[k], dtype=np.float32) for k in data.files}
+        if not self._d:
+            raise ValueError(f"Empty CLIP cache: {npz_path}")
+        self._dim = next(iter(self._d.values())).shape[0]
+        self._zero = np.zeros(self._dim, dtype=np.float32)
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    def __len__(self) -> int:
+        return len(self._d)
+
+    def get_by_key(self, key: str) -> np.ndarray:
+        v = self._d.get(key)
+        return v if v is not None else self._zero
+
+    def lookup_keys(self, keys: List[str]) -> Tuple[np.ndarray, int, int]:
+        """Resolve list of keys → (N, dim) fp32 array. Returns (arr, n_hit, n_miss)."""
+        n = len(keys)
+        out = np.zeros((n, self._dim), dtype=np.float32)
+        n_hit = 0
+        for i, k in enumerate(keys):
+            v = self._d.get(k)
+            if v is not None:
+                out[i] = v
+                n_hit += 1
+        return out, n_hit, n - n_hit
+
+
 class MotionLanguageDataset(Dataset):
     """
     PyTorch Dataset for contrastive motion-language training.
     Each sample: (motion_vector, language_embedding, expression_id)
     expression_id is an integer — all samples from the same expression share the same ID.
+    With clip_data: 4-tuple (motion, lang, label, clip).
     """
 
-    def __init__(self, motion_data, language_data, labels):
+    def __init__(self, motion_data, language_data, labels, clip_data=None):
         assert len(motion_data) == len(language_data) == len(labels)
+        if clip_data is not None:
+            assert len(clip_data) == len(motion_data)
         self.motion_data = motion_data
         self.language_data = language_data
         self.labels = labels
+        self.clip_data = clip_data
 
     def __len__(self):
         return len(self.motion_data)
@@ -471,14 +534,21 @@ class MotionLanguageDataset(Dataset):
         motion = torch.tensor(self.motion_data[idx], dtype=torch.float32)
         lang = torch.tensor(self.language_data[idx], dtype=torch.float32)
         label = torch.tensor(self.labels[idx], dtype=torch.long)
+        if self.clip_data is not None:
+            clip = torch.tensor(self.clip_data[idx], dtype=torch.float32)
+            return motion, lang, label, clip
         return motion, lang, label
 
 
 def collate_fn(batch):
-    """Stack into (Batch, 13) motion, (Batch, L_dim) language, and (Batch,) integer labels."""
+    """Stack into (B, D) motion, (B, L) language, (B,) labels.
+    If batch element is 4-tuple, also return (B, clip_dim) clip features."""
     motion_batch = torch.stack([item[0] for item in batch], dim=0)
     language_batch = torch.stack([item[1] for item in batch], dim=0)
     label_batch = torch.stack([item[2] for item in batch], dim=0)
+    if len(batch[0]) == 4:
+        clip_batch = torch.stack([item[3] for item in batch], dim=0)
+        return motion_batch, language_batch, label_batch, clip_batch
     return motion_batch, language_batch, label_batch
 
 
@@ -610,6 +680,53 @@ def is_motion_expression(sentence):
     """Check if a sentence describes motion (learnable from velocity vectors)."""
     lower = sentence.lower()
     return any(kw in lower for kw in MOTION_KEYWORDS)
+
+
+# Appearance / spatial / person-attribute tokens whose presence indicates the
+# expression carries non-motion semantic content the 13D motion vector cannot
+# encode (color, shape, side, person attrs, clothing).
+APPEARANCE_KEYWORDS = [
+    # color
+    "red", "blue", "black", "white", "silver", "gray", "grey",
+    "yellow", "green", "orange", "brown",
+    # size / shape
+    "large", "small", "big", "tall", "short", "mini", "huge", "tiny",
+    # vehicle subtype
+    "suv", "sedan", "truck", "van", "hatchback", "wagon", "bus", "bike",
+    "motorcycle", "bicycle",
+    # spatial side / position (when used as qualifier on noun)
+    "left", "right", "near", "far", "front side", "behind",
+    # person attributes
+    "man", "woman", "men", "women", "male", "female", "adult", "child",
+    "kid", "girl", "boy", "person", "people",
+    # clothing
+    "wearing", "dressed", "jacket", "shirt", "pants", "hat", "bag",
+    "shoes", "glasses", "coat",
+]
+
+
+def is_pure_motion_expression(sentence):
+    """Strict filter: motion keyword present AND no appearance/spatial qualifier."""
+    lower = sentence.lower()
+    if not any(kw in lower for kw in MOTION_KEYWORDS):
+        return False
+    return not any(kw in lower for kw in APPEARANCE_KEYWORDS)
+
+
+def select_expressions(all_expressions, motion_filter):
+    """Apply motion_filter mode and return filtered expression list.
+
+    motion_filter: "loose" (current; motion keyword present),
+                   "strict" (motion keyword AND no appearance qualifier),
+                   "off" (no filter; all expressions kept)
+    """
+    if motion_filter == "off":
+        return list(all_expressions)
+    if motion_filter == "strict":
+        return [e for e in all_expressions if is_pure_motion_expression(e["sentence"])]
+    if motion_filter == "loose":
+        return [e for e in all_expressions if is_motion_expression(e["sentence"])]
+    raise ValueError(f"motion_filter must be 'loose'|'strict'|'off', got {motion_filter!r}")
 
 
 # ── Motion-type grouping ────────────────────────────────────────────
@@ -934,6 +1051,30 @@ def _compute_velocity_at_gap(
     return res_dx, res_dy, bg_residual, ego_dx, ego_dy
 
 
+def _frame_cohort_dz_ego(
+    depth_cache: Any,
+    frame_id: int,
+    gap: int,
+) -> float:
+    """Median dZ over cohort of all tracks visible at both frame_id and frame_id+gap.
+
+    Returns 0.0 if cohort is empty. This is a robust ego-Z estimator: in static-
+    dominated scenes (parked cars), the median dZ across all visible tracks
+    approximates the camera's forward translation in metric Z over the gap.
+    Subtracting this isolates per-track Z change in the ego-compensated frame.
+    """
+    if depth_cache is None:
+        return 0.0
+    dzs = []
+    target_id = frame_id + gap
+    for tid_str, fmap in depth_cache.table.items():
+        z1 = fmap.get(str(frame_id))
+        z2 = fmap.get(str(target_id))
+        if z1 is not None and z2 is not None:
+            dzs.append(z2 - z1)
+    return float(np.median(dzs)) if dzs else 0.0
+
+
 def _generate_positive_pairs(
     track_centroids: Dict[int, Dict[int, Tuple[float, float, float, float]]],
     embedding: np.ndarray,
@@ -947,6 +1088,9 @@ def _generate_positive_pairs(
     all_track_centroids_for_frame: Dict[int, Dict[int, Tuple]] = None,
     track_boundaries: List = None,
     ego_router_name: str = "orb",
+    clip_keys: List[str] = None,
+    use_depth: bool = False,
+    depth_cache: Any = None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[int]]:
     """
     Generate positive (motion, language) pairs with residual velocity (raw - ego).
@@ -977,6 +1121,11 @@ def _generate_positive_pairs(
     # Pre-compute per-track mid-scale velocities for relational features
     # {frame_id: {track_id: (dx_m, dy_m, cx_n, cy_n)}}
     frame_track_data = {}
+
+    # Pre-compute frame-level cohort dZ_ego per (frame_id, gap) lazily.
+    # Uses absolute (frame, frame+gap) pairs across ALL tracks in depth_cache,
+    # so it's an unbiased ego-Z estimator independent of expression filtering.
+    cohort_dz_ego_cache: Dict[Tuple[int, int], float] = {}
 
     needs_accel_multiscale = "accel_multiscale" in per_track_feats
     needs_omf_stats = "omf_stats" in per_track_feats
@@ -1137,6 +1286,33 @@ def _generate_positive_pairs(
                 dw, dh, cx_n, cy_n, bw_n, bh_n, snr,
             ]
 
+            # Depth-augmentation 4D: [Z_n, dZ_res_short, dZ_res_mid, dZ_res_long].
+            # Z_n = clip(Z, 0, 80m) / 100  (~[0, 0.8]); dZ_res = (dZ_track - dZ_ego) / 10.
+            # Missing Z (track absent at frame, or future frame) → that slot = 0.
+            # Cohort dZ_ego = median over all tracks in depth_cache present at
+            # (curr_fid, curr_fid + gap) — robust ego-Z proxy in static-dominant scenes.
+            if use_depth and depth_cache is not None:
+                z_now = depth_cache.lookup(tid, curr_fid)
+                if z_now is None:
+                    base_vec.extend([0.0, 0.0, 0.0, 0.0])
+                else:
+                    z_now_clipped = max(0.0, min(80.0, float(z_now)))
+                    base_vec.append(z_now_clipped / 100.0)
+                    for gap in frame_gaps:
+                        target_fid = curr_fid + gap
+                        z_fut = depth_cache.lookup(tid, target_fid)
+                        if z_fut is None:
+                            base_vec.append(0.0)
+                            continue
+                        dz_track = float(z_fut) - float(z_now)
+                        cohort_key = (curr_fid, gap)
+                        if cohort_key not in cohort_dz_ego_cache:
+                            cohort_dz_ego_cache[cohort_key] = _frame_cohort_dz_ego(
+                                depth_cache, curr_fid, gap
+                            )
+                        dz_ego = cohort_dz_ego_cache[cohort_key]
+                        base_vec.append((dz_track - dz_ego) / 10.0)
+
             # Per-track extras (F1-F4)
             base_vec.extend(compute_per_track_extras(
                 per_track_feats, scale_velocities,
@@ -1159,6 +1335,8 @@ def _generate_positive_pairs(
             language_data.append(embedding.copy())
             labels.append(expression_id)
             track_frame_ids.append(curr_fid)
+            if clip_keys is not None:
+                clip_keys.append(f"{seq}__{curr_fid}__{tid}")
 
         if track_boundaries is not None and track_frame_ids:
             track_boundaries.append({
@@ -1280,6 +1458,11 @@ def build_training_data(
     extra_features: List[str] = None,
     seq_len: int = 0,
     ego_router_name: str = "orb",
+    motion_filter: str = "loose",
+    class_filter: str = "all",
+    clip_cache_path: str = None,
+    use_depth: bool = False,
+    depth_cache_dir: str = None,
 ) -> Tuple:
     """
     Build (motion, language, expression_id) training triples for contrastive learning.
@@ -1294,20 +1477,50 @@ def build_training_data(
         frame_gaps = FRAME_GAPS
 
     # ── Disk cache check (skip ORB + velocity rebuild for identical config) ──
-    use_cache = os.environ.get("GMCLINK_NO_CACHE", "0") != "1"
+    # Disk cache stashes (motion, lang, labels[, masks]) only — when CLIP feats
+    # are requested, key collection must run, so bypass the cache.
+    use_cache = (
+        os.environ.get("GMCLINK_NO_CACHE", "0") != "1"
+        and clip_cache_path is None
+    )
     encoder_name = getattr(text_encoder, "model_name", "all-MiniLM-L6-v2")
     cache_key, key_obj = _build_cache_key(
         data_root, sequences, frame_gaps, frame_shape,
         use_group_labels, extra_features, seq_len,
         text_encoder_name=encoder_name,
         ego_router_name=ego_router_name,
+        motion_filter=motion_filter,
+        class_filter=class_filter,
+        use_depth=use_depth,
     )
+
+    depth_caches: Dict[str, Any] = {}
+    if use_depth:
+        if depth_cache_dir is None:
+            raise ValueError("use_depth=True requires depth_cache_dir")
+        from gmc_link.depth_cache import DepthCache
+        for seq in sequences:
+            p = os.path.join(depth_cache_dir, f"z_track_gt_{seq}.json")
+            if not os.path.exists(p):
+                raise FileNotFoundError(
+                    f"depth cache missing for training seq {seq}: {p} "
+                    f"(build with run_build_depth_cache.py --arch gt --seq {seq})"
+                )
+            depth_caches[seq] = DepthCache.load(p)
+        print(f"  [depth] loaded {len(depth_caches)} per-seq Z caches from {depth_cache_dir}")
     if use_cache:
         cached = _try_load_cache(cache_key, seq_len)
         if cached is not None:
             print(f"  [cache] HIT key={cache_key} — skipping ORB+velocity build")
             return cached
         print(f"  [cache] MISS key={cache_key} — building from scratch")
+
+    clip_cache = None
+    all_clip_keys: List[str] = []
+    if clip_cache_path is not None:
+        print(f"  Loading CLIP feature cache: {clip_cache_path}")
+        clip_cache = ClipFeatCache(clip_cache_path)
+        print(f"    Loaded {len(clip_cache)} entries, dim={clip_cache.dim}")
 
     all_expressions, sentence_embeddings, all_sentences = _collect_expressions(
         data_root, sequences, text_encoder
@@ -1328,9 +1541,23 @@ def build_training_data(
     labels = []
 
     # Filter to motion-relevant expressions only — appearance-only sentences
-    # like "red cars" add noise since motion vectors can't encode color/shape
-    motion_expressions = [e for e in all_expressions if is_motion_expression(e["sentence"])]
-    print(f"  Motion-filtered: {len(motion_expressions)}/{len(all_expressions)} expressions")
+    # like "red cars" add noise since motion vectors can't encode color/shape.
+    # motion_filter: "loose" (default; motion keyword present),
+    #                "strict" (motion keyword AND no appearance qualifier),
+    #                "off" (keep all expressions)
+    motion_expressions = select_expressions(all_expressions, motion_filter)
+    print(f"  Motion-filter [{motion_filter}]: "
+          f"{len(motion_expressions)}/{len(all_expressions)} expressions")
+    if class_filter and class_filter != "all":
+        # Anchor-mask mode (Tier B 1 spec): KEEP full motion-filtered pool. Class
+        # restriction is applied later via anchor_mask in the InfoNCE loss so that
+        # negatives remain cross-class (preserving invariance teaching). Strict
+        # expression-filtering would replicate `project_strict_filter_negative`
+        # (micro −0.142). class_filter only narrows which anchors backprop.
+        from gmc_link.expr_class import class_distribution
+        dist = class_distribution(motion_expressions)
+        print(f"  Class-filter [{class_filter}]: anchor-mask mode (full pool kept). "
+              f"Class dist: {dist}. Active anchors will be class={class_filter}.")
 
     if use_group_labels:
         group_counts = {}
@@ -1406,6 +1633,7 @@ def build_training_data(
 
         # Generate only positive pairs — negatives are formed in-batch by InfoNCE
         per_expr_boundaries = [] if seq_len > 0 else None
+        per_expr_clip_keys = [] if clip_cache is not None else None
         m_data, l_data, lbls = _generate_positive_pairs(
             track_centroids,
             embedding,
@@ -1419,6 +1647,9 @@ def build_training_data(
             all_track_centroids_for_frame=all_frame_track_data,
             track_boundaries=per_expr_boundaries,
             ego_router_name=ego_router_name,
+            clip_keys=per_expr_clip_keys,
+            use_depth=use_depth,
+            depth_cache=depth_caches.get(seq) if use_depth else None,
         )
 
         # Offset boundaries to global indices before extending
@@ -1432,6 +1663,8 @@ def build_training_data(
         motion_data.extend(m_data)
         language_data.extend(l_data)
         labels.extend(lbls)
+        if per_expr_clip_keys is not None:
+            all_clip_keys.extend(per_expr_clip_keys)
 
     if use_group_labels:
         n_classes = len(set(labels))
@@ -1443,8 +1676,41 @@ def build_training_data(
         extra_dims = compute_extra_dims(extra_features)
         print(f"  Extra features: {extra_features} (+{extra_dims}D → {13 + extra_dims}D)")
 
+    # Build id_to_class lookup for anchor-mask mode (Tier B 1).
+    # Maps integer label_id (sentence-level OR group-level depending on
+    # use_group_labels) to the class_id of the underlying expression.
+    # For group labels, class is taken from the first expression mapped to
+    # that group; class-conditional training is not the design intent of
+    # group-label curriculum but the lookup must be defined regardless.
+    from gmc_link.expr_class import classify_expression, CLASS_LABELS
+    class_str_to_int = {c: i for i, c in enumerate(CLASS_LABELS)}
+    id_to_class = [-1] * (max(labels) + 1 if labels else 0)
+    if use_group_labels:
+        # Group labels: build label→sentence map by replaying the same logic
+        # used in the loop. For simplicity, scan motion_expressions and assign
+        # the first-seen class per group_id.
+        for expr in motion_expressions:
+            sentence = expr["sentence"]
+            gid = motion_type_group(sentence)
+            if 0 <= gid < len(id_to_class) and id_to_class[gid] == -1:
+                id_to_class[gid] = class_str_to_int[classify_expression(sentence)]
+    else:
+        for sentence, sid in sentence_to_id.items():
+            if 0 <= sid < len(id_to_class):
+                id_to_class[sid] = class_str_to_int[classify_expression(sentence)]
+    # Any remaining -1 (unused id slots) → fallback class 'appear' (broadest).
+    fallback = class_str_to_int["appear"]
+    id_to_class = [c if c >= 0 else fallback for c in id_to_class]
+    n_per_class = {c: id_to_class.count(i) for c, i in class_str_to_int.items()}
+    print(f"  id_to_class built: n_unique_labels={len(id_to_class)}, per-class={n_per_class}")
+
     # Convert to sequences if requested
     if seq_len > 0:
+        if clip_cache is not None:
+            raise NotImplementedError(
+                "clip_cache_path with seq_len>0 (transformer path) not implemented; "
+                "only MLP path is wired."
+            )
         print(f"  Converting to sequences (seq_len={seq_len})...")
         seq_motion, seq_masks, seq_language, seq_labels = _vectors_to_sequences(
             motion_data, language_data, labels, all_track_boundaries, seq_len=seq_len,
@@ -1452,10 +1718,18 @@ def build_training_data(
         print(f"  Sequences: {len(seq_motion)} (from {len(motion_data)} individual vectors)")
         if use_cache:
             _save_cache(cache_key, key_obj,
-                        (seq_motion, seq_masks, seq_language, seq_labels), seq_len)
-        return seq_motion, seq_masks, seq_language, seq_labels
+                        (seq_motion, seq_masks, seq_language, seq_labels, id_to_class), seq_len)
+        return seq_motion, seq_masks, seq_language, seq_labels, id_to_class
+
+    if clip_cache is not None:
+        assert len(all_clip_keys) == len(motion_data), (
+            f"clip_keys/motion mismatch: {len(all_clip_keys)} vs {len(motion_data)}"
+        )
+        clip_data, n_hit, n_miss = clip_cache.lookup_keys(all_clip_keys)
+        print(f"  CLIP lookup: {n_hit}/{len(all_clip_keys)} hit ({n_miss} miss → zero-fill)")
+        return motion_data, language_data, labels, clip_data, id_to_class
 
     if use_cache:
         _save_cache(cache_key, key_obj,
-                    (motion_data, language_data, labels), seq_len)
-    return motion_data, language_data, labels
+                    (motion_data, language_data, labels, id_to_class), seq_len)
+    return motion_data, language_data, labels, id_to_class
