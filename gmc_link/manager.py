@@ -44,6 +44,7 @@ class GMCLinkManager:
         lang_dim: int = 384,
         frame_gap: int = 10,  # max gap for buffer sizing
         ego_router: "EgoRouter | str | None" = None,
+        use_depth: bool = False,
     ) -> None:
         self.device = device
         self.frame_gap = frame_gap
@@ -65,6 +66,17 @@ class GMCLinkManager:
                 ckpt_lang_dim = checkpoint.get("lang_dim")
                 if ckpt_lang_dim is not None:
                     lang_dim = ckpt_lang_dim
+                ckpt_use_depth = checkpoint.get("use_depth")
+                if ckpt_use_depth is not None:
+                    use_depth = bool(ckpt_use_depth)
+
+        # 17D depth path
+        self.use_depth = bool(use_depth)
+        if self.use_depth and motion_dim == 13:
+            motion_dim = 17
+        self.motion_dim = motion_dim
+        # per-track Z history: {track_id: [(frame_id, z_meters), ...]}
+        self._z_history: Dict[int, list] = {}
 
         self.aligner = MotionLanguageAligner(
             motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256
@@ -99,6 +111,25 @@ class GMCLinkManager:
         # Background residual buffer for noise floor estimation
         self.bg_residual_buffer: deque = deque(maxlen=frame_gap + 1)
 
+    def _compute_dz_residual(
+        self,
+        z_now: Dict[int, float],
+        z_prev: Dict[int, float],
+        stationary_ids: set,
+    ) -> Dict[int, float]:
+        """Per-track dZ with ego-Z compensation.
+
+        dZ_ego = median(dZ) over stationary tracks; dZ_residual = dZ_track − dZ_ego.
+        Falls back to zero compensation if no stationary tracks.
+        """
+        dz_raw = {tid: z_now[tid] - z_prev[tid] for tid in z_now if tid in z_prev}
+        stat_dz = [dz_raw[tid] for tid in stationary_ids if tid in dz_raw]
+        if stat_dz:
+            dz_ego = float(np.median(stat_dz))
+        else:
+            dz_ego = 0.0
+        return {tid: v - dz_ego for tid, v in dz_raw.items()}
+
     def process_frame(
         self,
         frame: np.ndarray,
@@ -107,6 +138,7 @@ class GMCLinkManager:
         detections: Optional[np.ndarray] = None,
         update_state: bool = True,
         raw_cos: bool = False,
+        depth_z_lookup: Optional[Dict[int, float]] = None,
     ) -> Tuple[Dict[int, float], Dict[int, np.ndarray], Dict[int, float]]:
         """
         Process a frame: compute centroid-difference velocities per tracked object,
@@ -180,6 +212,10 @@ class GMCLinkManager:
 
         track_ids = []
         compensated_velocities = []
+        # Depth path: collect per-track raw dZ-per-gap, defer ego-Z comp until after loop
+        per_track_z_now: Dict[int, float] = {}
+        per_track_dz_raw: Dict[int, Dict[int, float]] = {}
+        per_track_res_speed: Dict[int, float] = {}
 
         for track in active_tracks:
             if not hasattr(track, "centroid") or track.centroid is None:
@@ -323,8 +359,64 @@ class GMCLinkManager:
                         [spatial_motion, np.array(extras, dtype=np.float32)]
                     )
 
+            # Depth path: collect raw dZ per gap & current Z (ego comp deferred)
+            if self.use_depth and depth_z_lookup is not None:
+                z_now = depth_z_lookup.get(tid)
+                per_track_z_now[tid] = z_now
+                per_track_res_speed[tid] = float(np.sqrt(dx_m ** 2 + dy_m ** 2))
+                if z_now is not None:
+                    hist = self._z_history.get(tid, [])
+                    z_at_gap: Dict[int, Optional[float]] = {g: None for g in self.FRAME_GAPS}
+                    for past_fid, past_z in reversed(hist):
+                        lag = self._frame_counter - past_fid
+                        for g in self.FRAME_GAPS:
+                            if z_at_gap[g] is None and lag >= g:
+                                z_at_gap[g] = past_z
+                    dz_raw_g: Dict[int, float] = {}
+                    for g in self.FRAME_GAPS:
+                        if z_at_gap[g] is not None:
+                            dz_raw_g[g] = z_now - z_at_gap[g]
+                    per_track_dz_raw[tid] = dz_raw_g
+                    if update_state:
+                        self._z_history.setdefault(tid, []).append((self._frame_counter, z_now))
+                        max_gap = max(self.FRAME_GAPS)
+                        self._z_history[tid] = [
+                            (f, z) for f, z in self._z_history[tid]
+                            if self._frame_counter - f <= max_gap + 1
+                        ]
+                else:
+                    per_track_dz_raw[tid] = {}
+
             track_ids.append(tid)
             compensated_velocities.append(spatial_motion)
+
+        # Post-loop: ego-Z compensation per gap (cohort median over stationary tracks)
+        # Stationary criterion: residual mid-scale speed < 0.01 (≈1 px/frame at KITTI W=1242).
+        if self.use_depth and depth_z_lookup is not None:
+            stat_ids = {tid for tid, mag in per_track_res_speed.items() if mag < 0.01}
+            dz_ego_per_gap: Dict[int, float] = {}
+            for g in self.FRAME_GAPS:
+                stat_dz = [per_track_dz_raw[tid][g]
+                           for tid in stat_ids
+                           if tid in per_track_dz_raw and g in per_track_dz_raw[tid]]
+                dz_ego_per_gap[g] = float(np.median(stat_dz)) if stat_dz else 0.0
+            for i, tid in enumerate(track_ids):
+                z_now = per_track_z_now.get(tid)
+                if z_now is None:
+                    depth_4d = np.zeros(4, dtype=np.float32)
+                else:
+                    z_n = float(np.clip(z_now, 0.0, 80.0) / 100.0)
+                    dz_g = per_track_dz_raw.get(tid, {})
+                    dz_residual = []
+                    for g in self.FRAME_GAPS:
+                        if g in dz_g:
+                            dz_residual.append((dz_g[g] - dz_ego_per_gap[g]) / 10.0)
+                        else:
+                            dz_residual.append(0.0)
+                    depth_4d = np.array([z_n, *dz_residual], dtype=np.float32)
+                compensated_velocities[i] = np.concatenate(
+                    [compensated_velocities[i], depth_4d]
+                ).astype(np.float32)
 
         if not compensated_velocities:
             return {}, {}, {}
