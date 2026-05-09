@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 from gmc_link.alignment import MotionLanguageAligner
 from gmc_link.dataset import (
     load_refer_kitti_expressions, load_labels_with_ids,
-    is_motion_expression, FRAME_GAPS,
+    is_motion_expression, FRAME_GAPS, ClipFeatCache,
 )
 from gmc_link.utils import VELOCITY_SCALE, warp_points
 from gmc_link.core import ORBHomographyEngine
@@ -88,17 +88,22 @@ def precompute_homographies(frame_dir, all_frame_ids, orb_engine):
 
 def compute_motion_vectors_for_all_tracks(
     all_track_centroids, active_frame_ids, homography_cache, frame_shape,
-    extra_features=None, seq=None,
+    extra_features=None, seq=None, depth_cache=None,
 ):
     """
     Compute motion vectors for ALL tracks at ALL active frames in one pass.
     Returns dict: {track_id: [(frame_id, motion_vector), ...]}
+
+    When depth_cache is provided, append [Z_n/100, dZ_2_ego/10, dZ_5_ego/10,
+    dZ_10_ego/10] to each base 13D vector (cohort-ego-compensated).
     """
     from gmc_link.dataset import (
         compute_per_track_extras, compute_relational_extras,
         compute_zoned_flow_features, compute_zoned_flow_features_rect,
-        _load_omf_field, _load_orb_grid_field,
+        _load_omf_field, _load_orb_grid_field, _frame_cohort_dz_ego,
     )
+
+    cohort_dz_ego_cache = {} if depth_cache is not None else None
 
     h, w = frame_shape
     sorted_active = sorted(active_frame_ids)
@@ -197,6 +202,28 @@ def compute_motion_vectors_for_all_tracks(
                 scale_velocities[2][0], scale_velocities[2][1],
                 dw, dh, cx / w, cy / h, bw / w, bh_val / h, snr,
             ]
+
+            if depth_cache is not None:
+                z_now = depth_cache.lookup(tid, curr_fid)
+                if z_now is None:
+                    base_vec.extend([0.0, 0.0, 0.0, 0.0])
+                else:
+                    z_now_clipped = max(0.0, min(80.0, float(z_now)))
+                    base_vec.append(z_now_clipped / 100.0)
+                    for gap in FRAME_GAPS:
+                        target_fid = curr_fid + gap
+                        z_fut = depth_cache.lookup(tid, target_fid)
+                        if z_fut is None:
+                            base_vec.append(0.0)
+                            continue
+                        dz_track = float(z_fut) - float(z_now)
+                        cohort_key = (curr_fid, gap)
+                        if cohort_key not in cohort_dz_ego_cache:
+                            cohort_dz_ego_cache[cohort_key] = _frame_cohort_dz_ego(
+                                depth_cache, curr_fid, gap
+                            )
+                        dz_ego = cohort_dz_ego_cache[cohort_key]
+                        base_vec.append((dz_track - dz_ego) / 10.0)
 
             # Per-track extras: compute true-temporal accel if requested
             accel_per_scale = None
@@ -311,6 +338,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", default=WEIGHTS_PATH)
     parser.add_argument("--seq", default=SEQUENCE)
+    parser.add_argument("--clip-cache-path", default="gmc_link/clip_b32_datacomp_v1_gt_cache.npz",
+                        help="CLIP cache npz; only loaded if checkpoint has use_clip_feat=True")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -323,6 +352,14 @@ def main():
     seq_len = 10
     text_encoder_name = "all-MiniLM-L6-v2"
     lang_dim = 384
+    use_clip_feat = False
+    clip_feat_dim = 512
+    clip_proj_dim = 64
+    fusion_site = "input_concat"
+    lang_passthrough = False
+    app_proj_dim = 256
+    use_depth = False
+    depth_cache_dir = None
     if isinstance(checkpoint, dict):
         motion_dim = checkpoint.get("motion_dim", 13)
         extra_features = checkpoint.get("extra_features", None)
@@ -330,16 +367,34 @@ def main():
         seq_len = checkpoint.get("seq_len", 10) or 10
         text_encoder_name = checkpoint.get("text_encoder", "all-MiniLM-L6-v2")
         lang_dim = checkpoint.get("lang_dim", 384)
+        use_clip_feat = bool(checkpoint.get("use_clip_feat", False))
+        clip_feat_dim = checkpoint.get("clip_feat_dim", 512) or 512
+        clip_proj_dim = checkpoint.get("clip_proj_dim", 64) or 64
+        fusion_site = checkpoint.get("fusion_site", "input_concat") or "input_concat"
+        lang_passthrough = bool(checkpoint.get("lang_passthrough", False))
+        app_proj_dim = checkpoint.get("app_proj_dim", 256) or 256
+        use_depth = bool(checkpoint.get("use_depth", False))
+        depth_cache_dir = checkpoint.get("depth_cache_dir", None)
     else:
         motion_dim = 13
 
     print(f"  Architecture: {architecture}" + (f" (seq_len={seq_len})" if architecture == "temporal_transformer" else ""))
     if text_encoder_name != "all-MiniLM-L6-v2":
         print(f"  Text encoder: {text_encoder_name} (lang_dim={lang_dim})")
+    if use_clip_feat:
+        print(f"  CLIP visual: ON (fusion_site={fusion_site}, "
+              f"clip_feat_dim={clip_feat_dim}, "
+              f"{'clip_proj_dim=' + str(clip_proj_dim) if fusion_site == 'input_concat' else 'app_proj_dim=' + str(app_proj_dim)}, "
+              f"lang_passthrough={lang_passthrough})")
 
     model = MotionLanguageAligner(
         motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256,
         architecture=architecture, seq_len=seq_len,
+        use_clip_feat=use_clip_feat,
+        clip_feat_dim=clip_feat_dim, clip_proj_dim=clip_proj_dim,
+        fusion_site=fusion_site,
+        lang_passthrough=lang_passthrough,
+        app_proj_dim=app_proj_dim,
     ).to(device)
     if isinstance(checkpoint, dict) and "model" in checkpoint:
         model.load_state_dict(checkpoint["model"])
@@ -350,6 +405,15 @@ def main():
     if extra_features:
         print(f"  Extra features: {extra_features} ({motion_dim}D)")
         from gmc_link.dataset import compute_per_track_extras
+
+    clip_cache = None
+    if use_clip_feat:
+        if not os.path.exists(args.clip_cache_path):
+            raise FileNotFoundError(
+                f"Checkpoint requires CLIP feats but cache not found: {args.clip_cache_path}"
+            )
+        clip_cache = ClipFeatCache(args.clip_cache_path)
+        print(f"  CLIP cache: {args.clip_cache_path} ({len(clip_cache)} crops, dim={clip_cache.dim})")
 
     # ── Load data ─────────────────────────────────────────────────────
     encoder = TextEncoder(model_name=text_encoder_name, device=str(device))
@@ -386,11 +450,24 @@ def main():
         frame_dir, all_frame_ids, orb_engine
     )
 
+    # ── Load depth cache if checkpoint requires it ───────────────────
+    depth_cache = None
+    if use_depth:
+        from gmc_link.depth_cache import DepthCache
+        depth_path = os.path.join(depth_cache_dir or "gmc_link/depth_cache",
+                                  f"z_track_gt_{args.seq}.json")
+        if not os.path.exists(depth_path):
+            raise FileNotFoundError(
+                f"Checkpoint requires depth (use_depth=True) but cache missing: {depth_path}"
+            )
+        depth_cache = DepthCache.load(depth_path)
+        print(f"  Depth cache: {depth_path} ({len(depth_cache.table)} tracks)")
+
     # ── Compute motion vectors for ALL tracks at once ────────────────
     print("Computing motion vectors for all tracks...")
     track_motion_vecs = compute_motion_vectors_for_all_tracks(
         all_track_centroids, set(all_frame_ids), homography_cache, frame_shape,
-        extra_features=extra_features, seq=args.seq,
+        extra_features=extra_features, seq=args.seq, depth_cache=depth_cache,
     )
     print(f"  Tracks with motion vectors: {len(track_motion_vecs)}")
 
@@ -443,17 +520,34 @@ def main():
     else:
         print("Encoding all motion vectors on GPU...")
         all_vecs_list = []
+        all_clip_keys = []
         vec_to_track = []
         for tid, frame_vecs in track_motion_vecs.items():
             for fid, vec in frame_vecs:
                 all_vecs_list.append(vec)
+                all_clip_keys.append(f"{args.seq}__{fid}__{tid}")
                 vec_to_track.append((tid, fid))
 
         all_motion_embs = None
         if all_vecs_list:
             all_vecs_tensor = torch.tensor(np.array(all_vecs_list), dtype=torch.float32).to(device)
             with torch.no_grad():
-                all_motion_embs = F.normalize(model.motion_projector(all_vecs_tensor), p=2, dim=-1)
+                if use_clip_feat:
+                    clip_arr, n_hit, n_miss = clip_cache.lookup_keys(all_clip_keys)
+                    print(f"  CLIP key resolve: {n_hit} hit / {n_miss} miss "
+                          f"({100.0 * n_hit / max(1, n_hit + n_miss):.1f}% hit)")
+                    clip_tensor = torch.tensor(clip_arr, dtype=torch.float32).to(device)
+                    if fusion_site == "input_concat":
+                        clip_proj_out = model.clip_proj(clip_tensor)
+                        motion_in = torch.cat([all_vecs_tensor, clip_proj_out], dim=-1)
+                        m_out = model.motion_projector(motion_in)
+                    else:  # late_concat
+                        m_out = model.motion_projector(all_vecs_tensor)
+                        a_out = model.app_projector(clip_tensor)
+                        m_out = torch.cat([m_out, a_out], dim=-1)
+                else:
+                    m_out = model.motion_projector(all_vecs_tensor)
+                all_motion_embs = F.normalize(m_out, p=2, dim=-1)
             print(f"  Encoded {len(all_vecs_list)} motion vectors → {all_motion_embs.shape}")
 
         track_emb_slices = {}
