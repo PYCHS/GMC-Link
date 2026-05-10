@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from gmc_link.manager import GMCLinkManager
 from gmc_link.text_utils import TextEncoder
 from gmc_link.demo_inference import load_neuralsort_tracks, DummyTrack
+from gmc_link.depth_cache import DepthCache
 
 DATA_ROOT   = "refer-kitti"
 TRACK_DIR   = "/home/seanachan/FlexHook/FlexHook/tracker_outputs/Temp-NeuralSORT-kitti1"
@@ -29,6 +30,8 @@ FRAME_DIR   = "/home/seanachan/data/Dataset/refer-kitti/KITTI/training/image_02"
 GMC_WEIGHTS = os.environ.get("GMC_WEIGHTS", "gmc_link_weights_v1train.pth")
 GMC_SUFFIX  = os.environ.get("GMC_SUFFIX", "")
 GMC_RAW_COS = os.environ.get("GMC_RAW_COS", "0") == "1"
+GMC_DEPTH_ARCH = os.environ.get("GMC_DEPTH_ARCH", "fh_v1")
+GMC_DEPTH_DIR  = os.environ.get("GMC_DEPTH_DIR",  "gmc_link/depth_cache")
 DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -62,14 +65,25 @@ def build(seq):
     print(f"[gmc] building FlexHook-tracker cache on {seq} → {cache_path}")
     text_encoder_name = "all-MiniLM-L6-v2"
     lang_dim = 384
+    use_depth = False
+    world_xy = False
     if os.path.exists(GMC_WEIGHTS):
         ckpt_meta = torch.load(GMC_WEIGHTS, map_location="cpu")
         if isinstance(ckpt_meta, dict) and "model" in ckpt_meta:
             text_encoder_name = ckpt_meta.get("text_encoder") or text_encoder_name
             lang_dim = ckpt_meta.get("lang_dim") or lang_dim
+            use_depth = bool(ckpt_meta.get("use_depth", False))
+            world_xy = bool(ckpt_meta.get("world_xy", False))
         del ckpt_meta
-    print(f"  [gmc] text_encoder={text_encoder_name} lang_dim={lang_dim}")
+    print(f"  [gmc] text_encoder={text_encoder_name} lang_dim={lang_dim} use_depth={use_depth} world_xy={world_xy}")
     encoder = TextEncoder(model_name=text_encoder_name, device=DEVICE)
+
+    depth_cache = None
+    if use_depth:
+        depth_path = os.path.join(GMC_DEPTH_DIR, f"z_track_{GMC_DEPTH_ARCH}_{seq}.json")
+        depth_cache = DepthCache.load(depth_path)
+        print(f"  [gmc] loaded depth cache {depth_path} tracks={len(depth_cache.table)}")
+
     ns_tracks = merged_flexhook_tracks(seq)
     expr_dir = os.path.join(DATA_ROOT, "expression", seq)
     expressions = sorted(f.replace(".json", "") for f in os.listdir(expr_dir) if f.endswith(".json"))
@@ -81,7 +95,7 @@ def build(seq):
     cache = {}
     for expression in tqdm(expressions, desc=f"gmc-expr-{seq}"):
         text_emb = encoder.encode(expression.replace("-", " ")).to(DEVICE)
-        linker = GMCLinkManager(weights_path=GMC_WEIGHTS, device=DEVICE, lang_dim=lang_dim)
+        linker = GMCLinkManager(weights_path=GMC_WEIGHTS, device=DEVICE, lang_dim=lang_dim, world_xy=world_xy)
         per_expr = {}
         for f0 in range(total_frames):
             f1 = f0 + 1
@@ -93,7 +107,14 @@ def build(seq):
                 continue
             active = [DummyTrack(oid, x, y, w, h) for oid, x, y, w, h in dets]
             det_arr = np.array([[x, y, x + w, y + h] for _, x, y, w, h in dets])
-            scores, _, _ = linker.process_frame(frame_img, active, text_emb, detections=det_arr, raw_cos=GMC_RAW_COS)
+            depth_z_lookup = None
+            if depth_cache is not None:
+                depth_z_lookup = {}
+                for oid, *_ in dets:
+                    z = depth_cache.lookup(oid, f1)
+                    if z is not None:
+                        depth_z_lookup[oid] = float(z)
+            scores, _, _ = linker.process_frame(frame_img, active, text_emb, detections=det_arr, raw_cos=GMC_RAW_COS, depth_z_lookup=depth_z_lookup, seq=seq)
             for oid, g in scores.items():
                 per_expr.setdefault(str(f1), {})[str(oid)] = float(g)
         cache[expression] = per_expr

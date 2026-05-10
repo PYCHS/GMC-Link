@@ -88,7 +88,7 @@ def precompute_homographies(frame_dir, all_frame_ids, orb_engine):
 
 def compute_motion_vectors_for_all_tracks(
     all_track_centroids, active_frame_ids, homography_cache, frame_shape,
-    extra_features=None, seq=None, depth_cache=None,
+    extra_features=None, seq=None, depth_cache=None, world_xy=False,
 ):
     """
     Compute motion vectors for ALL tracks at ALL active frames in one pass.
@@ -104,6 +104,11 @@ def compute_motion_vectors_for_all_tracks(
     )
 
     cohort_dz_ego_cache = {} if depth_cache is not None else None
+
+    world_intrinsics = None
+    if world_xy:
+        from gmc_link.camera_intrinsics import CameraIntrinsics
+        world_intrinsics = CameraIntrinsics()
 
     h, w = frame_shape
     sorted_active = sorted(active_frame_ids)
@@ -195,6 +200,18 @@ def compute_motion_vectors_for_all_tracks(
                 + (best_bg_residual[1] / h * VELOCITY_SCALE) ** 2
             )
             snr = obj_speed / (bg_mag + 1e-6)
+
+            if world_xy and world_intrinsics is not None:
+                if depth_cache is not None:
+                    z_now_lookup = depth_cache.lookup(tid, curr_fid)
+                    z_eff = float(z_now_lookup) if z_now_lookup is not None else 30.0
+                else:
+                    z_eff = 30.0
+                z_eff = max(1.0, min(80.0, z_eff))
+                f_x, f_y, _, _ = world_intrinsics.get(seq if seq else "0005")
+                sx = (w / VELOCITY_SCALE) * z_eff / f_x * 2.0
+                sy = (h / VELOCITY_SCALE) * z_eff / f_y * 2.0
+                scale_velocities = [(dx * sx, dy * sy) for dx, dy in scale_velocities]
 
             base_vec = [
                 scale_velocities[0][0], scale_velocities[0][1],
@@ -360,6 +377,7 @@ def main():
     app_proj_dim = 256
     use_depth = False
     depth_cache_dir = None
+    world_xy = False
     if isinstance(checkpoint, dict):
         motion_dim = checkpoint.get("motion_dim", 13)
         extra_features = checkpoint.get("extra_features", None)
@@ -375,6 +393,7 @@ def main():
         app_proj_dim = checkpoint.get("app_proj_dim", 256) or 256
         use_depth = bool(checkpoint.get("use_depth", False))
         depth_cache_dir = checkpoint.get("depth_cache_dir", None)
+        world_xy = bool(checkpoint.get("world_xy", False))
     else:
         motion_dim = 13
 
@@ -386,6 +405,8 @@ def main():
               f"clip_feat_dim={clip_feat_dim}, "
               f"{'clip_proj_dim=' + str(clip_proj_dim) if fusion_site == 'input_concat' else 'app_proj_dim=' + str(app_proj_dim)}, "
               f"lang_passthrough={lang_passthrough})")
+    if world_xy:
+        print(f"  world_xy=True (image dx/dy → metric world dX/dY via inverse pinhole)")
 
     model = MotionLanguageAligner(
         motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256,
@@ -468,6 +489,7 @@ def main():
     track_motion_vecs = compute_motion_vectors_for_all_tracks(
         all_track_centroids, set(all_frame_ids), homography_cache, frame_shape,
         extra_features=extra_features, seq=args.seq, depth_cache=depth_cache,
+        world_xy=world_xy,
     )
     print(f"  Tracks with motion vectors: {len(track_motion_vecs)}")
 

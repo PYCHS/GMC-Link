@@ -19,6 +19,7 @@ from gmc_link.manager import GMCLinkManager
 from gmc_link.utils import ScoreBuffer
 from gmc_link.text_utils import TextEncoder
 from gmc_link.demo_inference import load_neuralsort_tracks, DummyTrack
+from gmc_link.depth_cache import DepthCache
 
 V2_DATA_ROOT = "/home/seanachan/data/Dataset/refer-kitti-v2"
 TRACK_DIR    = "/home/seanachan/FlexHook/FlexHook/tracker_outputs/Temp-NeuralSORT-kitti2"
@@ -27,6 +28,8 @@ EXPR_ROOT    = os.path.join(V2_DATA_ROOT, "expression")
 GMC_WEIGHTS  = os.environ.get("GMC_WEIGHTS", "gmc_link_weights_v1train.pth")
 GMC_SUFFIX   = os.environ.get("GMC_SUFFIX", "")
 GMC_RAW_COS  = os.environ.get("GMC_RAW_COS", "0") == "1"  # Arm B: dump raw cosine, skip sigmoid+EMA
+GMC_DEPTH_ARCH = os.environ.get("GMC_DEPTH_ARCH", "fh_v2")
+GMC_DEPTH_DIR  = os.environ.get("GMC_DEPTH_DIR",  "gmc_link/depth_cache")
 DEVICE       = "cuda" if torch.cuda.is_available() else "cpu"
 TEST_SEQS    = ["0005", "0011", "0013", "0019"]
 SCORE_MARGIN = 0.05  # matches GMCLinkManager.process_frame line 339
@@ -49,14 +52,13 @@ def merged_flexhook_tracks(seq):
     return ns
 
 
-def precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=384):
-    """Pass 1: run ORB+homography+13D once per frame. Returns ordered list of
-    (fid, oid, vec13). Order matches insertion (frame asc, then oid order from
-    tracker)."""
-    linker = GMCLinkManager(weights_path=GMC_WEIGHTS, device=DEVICE, lang_dim=lang_dim)
+def precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=384, depth_cache=None, world_xy=False):
+    """Pass 1: run ORB+homography+13D (or 17D when depth_cache given) once per
+    frame. Returns ordered list of (fid, oid, vec). Order matches insertion."""
+    linker = GMCLinkManager(weights_path=GMC_WEIGHTS, device=DEVICE, lang_dim=lang_dim, world_xy=world_xy)
     dummy_lang = torch.zeros(1, lang_dim, device=DEVICE)
-    keys = []  # list of (fid, oid)
-    motions = []  # list of 13D np arrays
+    keys = []
+    motions = []
     total_frames = len(frame_files)
     for f0 in tqdm(range(total_frames), desc=f"motion-{seq}"):
         f1 = f0 + 1
@@ -68,8 +70,16 @@ def precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=384):
             continue
         active = [DummyTrack(oid, x, y, w, h) for oid, x, y, w, h in dets]
         det_arr = np.array([[x, y, x + w, y + h] for _, x, y, w, h in dets])
+        depth_z_lookup = None
+        if depth_cache is not None:
+            depth_z_lookup = {}
+            for oid, *_ in dets:
+                z = depth_cache.lookup(oid, f1)
+                if z is not None:
+                    depth_z_lookup[oid] = float(z)
         _, velocities, _ = linker.process_frame(
-            frame_img, active, dummy_lang, detections=det_arr, update_state=True
+            frame_img, active, dummy_lang, detections=det_arr, update_state=True,
+            depth_z_lookup=depth_z_lookup, seq=seq,
         )
         for oid, vec in velocities.items():
             keys.append((f1, oid))
@@ -124,14 +134,25 @@ def build(seq):
     print(f"[gmc] building FlexHook V2 RAW cache on {seq} → {cache_path}")
     text_encoder_name = "all-MiniLM-L6-v2"
     lang_dim = 384
+    use_depth = False
+    world_xy = False
     if os.path.exists(GMC_WEIGHTS):
         ckpt_meta = torch.load(GMC_WEIGHTS, map_location="cpu")
         if isinstance(ckpt_meta, dict) and "model" in ckpt_meta:
             text_encoder_name = ckpt_meta.get("text_encoder") or text_encoder_name
             lang_dim = ckpt_meta.get("lang_dim") or lang_dim
+            use_depth = bool(ckpt_meta.get("use_depth", False))
+            world_xy = bool(ckpt_meta.get("world_xy", False))
         del ckpt_meta
-    print(f"  [gmc] text_encoder={text_encoder_name} lang_dim={lang_dim}")
+    print(f"  [gmc] text_encoder={text_encoder_name} lang_dim={lang_dim} use_depth={use_depth} world_xy={world_xy}")
     encoder = TextEncoder(model_name=text_encoder_name, device=DEVICE)
+
+    depth_cache = None
+    if use_depth:
+        depth_path = os.path.join(GMC_DEPTH_DIR, f"z_track_{GMC_DEPTH_ARCH}_{seq}.json")
+        depth_cache = DepthCache.load(depth_path)
+        print(f"  [gmc] loaded depth cache {depth_path} tracks={len(depth_cache.table)}")
+
     ns_tracks = merged_flexhook_tracks(seq)
     expr_dir = os.path.join(EXPR_ROOT, seq)
     expr_files = sorted(f for f in os.listdir(expr_dir) if f.endswith(".json"))
@@ -143,7 +164,7 @@ def build(seq):
     frame_files = sorted(f for f in os.listdir(seq_frame_dir) if f.endswith((".png", ".jpg")))
     print(f"  {len(expr_to_raw)} exprs, {len(frame_files)} frames, {sum(len(v) for v in ns_tracks.values())} dets total")
 
-    linker, keys, motions = precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=lang_dim)
+    linker, keys, motions = precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=lang_dim, depth_cache=depth_cache, world_xy=world_xy)
     print(f"  motion pass: {len(keys)} (fid,oid) entries", flush=True)
     motion_emb = project_motion(linker, motions, lang_dim=lang_dim)
     print(f"  motion_emb: {tuple(motion_emb.shape)}", flush=True)
