@@ -144,6 +144,7 @@ def setup_data(
     clip_cache_path: str = None,
     use_depth: bool = False,
     depth_cache_dir: str = None,
+    world_xy: bool = False,
 ) -> Optional[DataLoader]:
     """
     Initialize text encoder, build training dataset, and return a DataLoader.
@@ -188,6 +189,7 @@ def setup_data(
             clip_cache_path=clip_cache_path,
             use_depth=use_depth,
             depth_cache_dir=depth_cache_dir,
+            world_xy=world_xy,
         )
         if seq_len > 0:
             seq_motion, seq_masks, seq_language, seq_labels, src_id_to_class = result
@@ -439,6 +441,7 @@ def _run_single_stage(
     use_depth: bool = False,
     depth_cache_dir: str = None,
     identity_init_depth: bool = False,
+    world_xy: bool = False,
 ) -> None:
     """Run a single training stage."""
     if loss_name == "hninfo" and use_group_labels:
@@ -457,7 +460,8 @@ def _run_single_stage(
                             class_filter=class_filter,
                             clip_cache_path=clip_cache_path if use_clip_feat else None,
                             use_depth=use_depth,
-                            depth_cache_dir=depth_cache_dir if use_depth else None)
+                            depth_cache_dir=depth_cache_dir if use_depth else None,
+                            world_xy=world_xy)
     if dataloader is None:
         print("ERROR: No training data found.")
         return
@@ -525,6 +529,7 @@ def _run_single_stage(
     checkpoint["use_depth"] = use_depth
     checkpoint["depth_cache_dir"] = depth_cache_dir if use_depth else None
     checkpoint["identity_init_depth"] = identity_init_depth
+    checkpoint["world_xy"] = world_xy
     torch.save(checkpoint, save_path)
 
 
@@ -607,6 +612,11 @@ def main() -> None:
                         help="Zero-init the 4 depth weight columns of motion_projector[0] "
                              "so depth tail contributes zero at step 0 (bit-exact 13D init "
                              "until first gradient step).")
+    parser.add_argument("--world-xy", action="store_true",
+                        help="Project image-plane (dx, dy) per scale to metric world "
+                             "(dX, dY) via inverse pinhole `dX = dx_pixel * Z / f_x`. "
+                             "Same dim, drop-in feature swap on top of --use-depth path. "
+                             "Z lookup matches use_depth (default 30m fallback).")
     parser.add_argument("--seed", type=int, default=None,
                         help="RNG seed for torch/numpy/random (default: nondeterministic)")
     args = parser.parse_args()
@@ -713,6 +723,7 @@ def main() -> None:
             use_depth=args.use_depth,
             depth_cache_dir=args.depth_cache_dir,
             identity_init_depth=args.identity_init_depth,
+            world_xy=args.world_xy,
         )
 
         stage2_lr = args.lr * 0.1
@@ -738,6 +749,7 @@ def main() -> None:
             use_depth=args.use_depth,
             depth_cache_dir=args.depth_cache_dir,
             identity_init_depth=args.identity_init_depth,
+            world_xy=args.world_xy,
         )
         return
 
@@ -777,6 +789,7 @@ def main() -> None:
         use_depth=args.use_depth,
         depth_cache_dir=args.depth_cache_dir,
         identity_init_depth=args.identity_init_depth,
+        world_xy=args.world_xy,
     )
 
 
