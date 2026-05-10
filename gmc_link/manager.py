@@ -37,6 +37,11 @@ class GMCLinkManager:
     # Multi-scale frame gaps matching training
     FRAME_GAPS = [2, 5, 10]  # short, mid, long
 
+    # World-XY projection scale: tunes 95th-percentile world dX/dY input to ~1.0
+    # so MLP inputs sit near unit magnitude after Z/f projection. Calibrated
+    # against KITTI car-speed distribution (~0.5 m/frame at 10 fps).
+    VELOCITY_SCALE_WORLD = 2.0
+
     def __init__(
         self,
         weights_path: str = None,
@@ -45,6 +50,7 @@ class GMCLinkManager:
         frame_gap: int = 10,  # max gap for buffer sizing
         ego_router: "EgoRouter | str | None" = None,
         use_depth: bool = False,
+        world_xy: bool = False,
     ) -> None:
         self.device = device
         self.frame_gap = frame_gap
@@ -69,12 +75,24 @@ class GMCLinkManager:
                 ckpt_use_depth = checkpoint.get("use_depth")
                 if ckpt_use_depth is not None:
                     use_depth = bool(ckpt_use_depth)
+                ckpt_world_xy = checkpoint.get("world_xy")
+                if ckpt_world_xy is not None:
+                    world_xy = bool(ckpt_world_xy)
 
         # 17D depth path
         self.use_depth = bool(use_depth)
         if self.use_depth and motion_dim == 13:
             motion_dim = 17
         self.motion_dim = motion_dim
+
+        # World-XY projection: swap image dx/dy for metric world dX/dY
+        # via inverse pinhole `dX = dx_pixel * Z / f_x`. Same dim, drop-in.
+        self.world_xy = bool(world_xy)
+        if self.world_xy:
+            from gmc_link.camera_intrinsics import CameraIntrinsics
+            self.intrinsics = CameraIntrinsics()
+        else:
+            self.intrinsics = None
         # per-track Z history: {track_id: [(frame_id, z_meters), ...]}
         self._z_history: Dict[int, list] = {}
 
@@ -139,6 +157,7 @@ class GMCLinkManager:
         update_state: bool = True,
         raw_cos: bool = False,
         depth_z_lookup: Optional[Dict[int, float]] = None,
+        seq: Optional[str] = None,
     ) -> Tuple[Dict[int, float], Dict[int, np.ndarray], Dict[int, float]]:
         """
         Process a frame: compute centroid-difference velocities per tracked object,
@@ -316,6 +335,27 @@ class GMCLinkManager:
                 [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l,
                  dw, dh, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
             )
+
+            # World-XY projection: swap image dx/dy for metric world dX/dY.
+            # Each smoothed slot s_norm = (pixel_dx / W) * VELOCITY_SCALE.
+            # Recover pixels (× W / VELOCITY_SCALE), project (× Z / f), re-normalize
+            # (× VELOCITY_SCALE_WORLD). Combined factor = (W/VELOCITY_SCALE)·(Z/f)·SCALE_WORLD.
+            # snr stays image-domain (slot 12) — bg + obj ratio coherent only in pixel space.
+            if self.world_xy and self.intrinsics is not None and seq is not None:
+                f_x, f_y, _, _ = self.intrinsics.get(seq)
+                z_raw = None
+                if depth_z_lookup is not None:
+                    z_raw = depth_z_lookup.get(tid)
+                z_eff = float(z_raw) if z_raw is not None else 30.0
+                z_eff = max(1.0, min(80.0, z_eff))
+                sx = (img_w / VELOCITY_SCALE) * z_eff / f_x * self.VELOCITY_SCALE_WORLD
+                sy = (img_h / VELOCITY_SCALE) * z_eff / f_y * self.VELOCITY_SCALE_WORLD
+                spatial_motion[0] *= sx  # dx_s
+                spatial_motion[1] *= sy  # dy_s
+                spatial_motion[2] *= sx  # dx_m
+                spatial_motion[3] *= sy  # dy_m
+                spatial_motion[4] *= sx  # dx_l
+                spatial_motion[5] *= sy  # dy_l
 
             if self.extra_features:
                 # Per-track (non-relational) extras only — manager has no neighbor context.
