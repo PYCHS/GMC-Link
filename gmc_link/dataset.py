@@ -70,6 +70,10 @@ def _omf_cache_reset():
 # Multi-scale frame gaps for temporal velocity features
 FRAME_GAPS = [2, 5, 10]  # short, mid, long
 
+# Lazy CameraIntrinsics singleton for world-XY projection. Built on first
+# world_xy=True call to avoid import cost on the legacy path.
+_world_intrinsics_singleton = None
+
 # ── Training-data disk cache ─────────────────────────────────────────
 # Bump CACHE_VERSION whenever the build logic changes in a way that
 # affects output (feature layout, jitter, motion keywords, etc.).
@@ -85,7 +89,7 @@ def _build_cache_key(
     data_root, sequences, frame_gaps, frame_shape,
     use_group_labels, extra_features, seq_len, text_encoder_name="all-MiniLM-L6-v2",
     ego_router_name="orb", motion_filter="loose", class_filter="all",
-    use_depth=False,
+    use_depth=False, world_xy=False,
 ):
     """Deterministic hash of everything that affects build_training_data output.
 
@@ -111,6 +115,8 @@ def _build_cache_key(
         key_obj["motion_filter"] = str(motion_filter)
     if use_depth:
         key_obj["use_depth"] = True
+    if world_xy:
+        key_obj["world_xy"] = True
     # NB: class_filter intentionally NOT in cache key. Anchor-mask mode keeps
     # the full motion-filtered pool; only the loss anchor_mask depends on it.
     # Same cached (motion, lang, labels, id_to_class) serves all class_filter values.
@@ -1091,6 +1097,7 @@ def _generate_positive_pairs(
     clip_keys: List[str] = None,
     use_depth: bool = False,
     depth_cache: Any = None,
+    world_xy: bool = False,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[int]]:
     """
     Generate positive (motion, language) pairs with residual velocity (raw - ego).
@@ -1098,6 +1105,12 @@ def _generate_positive_pairs(
     Base 13D vector: [res_dx_s, res_dy_s, res_dx_m, res_dy_m, res_dx_l, res_dy_l,
                       dw, dh, cx, cy, w, h, snr]
     + optional extra features appended.
+
+    World-XY projection: when ``world_xy=True``, swap image-domain residual
+    (dx, dy) per scale for metric world (dX, dY) via inverse pinhole
+    `world_dX = pixel_dx * Z / f_x`. snr stays image-domain (slot 12)
+    so bg + obj ratio remains coherent. Z lookup matches use_depth path;
+    default 30m fallback when depth missing.
     """
     h, w = frame_shape
     motion_data = []
@@ -1269,7 +1282,7 @@ def _generate_positive_pairs(
             cx_n, cy_n = cx1 / w, cy1 / h
             bw_n, bh_n = bw1 / w, bh1 / h
 
-            # SNR from primary (mid) scale warped speed
+            # SNR from primary (mid) scale warped speed (image-domain)
             mid_dx, mid_dy = scale_velocities[primary_gap_idx]
             obj_speed = np.sqrt(mid_dx ** 2 + mid_dy ** 2)
             bg_mag = np.sqrt(
@@ -1277,6 +1290,26 @@ def _generate_positive_pairs(
                 + (best_bg_residual[1] / h * VELOCITY_SCALE) ** 2
             )
             snr = obj_speed / (bg_mag + 1e-6)
+
+            # World-XY projection: swap image dx/dy for metric world dX/dY.
+            # Each smoothed slot s_norm = (pixel_dx / W) * VELOCITY_SCALE.
+            # Recover pixels (× W / VELOCITY_SCALE), project (× Z / f), re-normalize
+            # (× VELOCITY_SCALE_WORLD = 2.0). Combined factor sx = W·Z/(VELOCITY_SCALE·f)·2.
+            if world_xy:
+                if depth_cache is not None:
+                    z_now_lookup = depth_cache.lookup(tid, curr_fid)
+                    z_eff = float(z_now_lookup) if z_now_lookup is not None else 30.0
+                else:
+                    z_eff = 30.0
+                z_eff = max(1.0, min(80.0, z_eff))
+                global _world_intrinsics_singleton
+                if _world_intrinsics_singleton is None:
+                    from gmc_link.camera_intrinsics import CameraIntrinsics
+                    _world_intrinsics_singleton = CameraIntrinsics()
+                f_x, f_y, _, _ = _world_intrinsics_singleton.get(seq if seq else "0005")
+                sx = (w / VELOCITY_SCALE) * z_eff / f_x * 2.0
+                sy = (h / VELOCITY_SCALE) * z_eff / f_y * 2.0
+                scale_velocities = [(dx * sx, dy * sy) for dx, dy in scale_velocities]
 
             # Base 13D vector
             base_vec = [
@@ -1463,6 +1496,7 @@ def build_training_data(
     clip_cache_path: str = None,
     use_depth: bool = False,
     depth_cache_dir: str = None,
+    world_xy: bool = False,
 ) -> Tuple:
     """
     Build (motion, language, expression_id) training triples for contrastive learning.
@@ -1492,6 +1526,7 @@ def build_training_data(
         motion_filter=motion_filter,
         class_filter=class_filter,
         use_depth=use_depth,
+        world_xy=world_xy,
     )
 
     depth_caches: Dict[str, Any] = {}
@@ -1650,6 +1685,7 @@ def build_training_data(
             clip_keys=per_expr_clip_keys,
             use_depth=use_depth,
             depth_cache=depth_caches.get(seq) if use_depth else None,
+            world_xy=world_xy,
         )
 
         # Offset boundaries to global indices before extending
