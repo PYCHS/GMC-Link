@@ -62,6 +62,10 @@ class GMCLinkManager:
         self.extra_features: list = []
         motion_dim = 13
         self.temperature = 1.0
+        # CLIP-feat (Exp 39): ckpt meta drives aligner ctor + runtime extraction.
+        self.use_clip_feat = False
+        self.clip_feat_dim = 512
+        self.clip_proj_dim = 64
         checkpoint = None
         if weights_path:
             checkpoint = torch.load(weights_path, map_location=device)
@@ -78,6 +82,9 @@ class GMCLinkManager:
                 ckpt_world_xy = checkpoint.get("world_xy")
                 if ckpt_world_xy is not None:
                     world_xy = bool(ckpt_world_xy)
+                self.use_clip_feat = bool(checkpoint.get("use_clip_feat", False))
+                self.clip_feat_dim = int(checkpoint.get("clip_feat_dim", 512))
+                self.clip_proj_dim = int(checkpoint.get("clip_proj_dim", 64))
 
         # 17D depth path
         self.use_depth = bool(use_depth)
@@ -97,8 +104,26 @@ class GMCLinkManager:
         self._z_history: Dict[int, list] = {}
 
         self.aligner = MotionLanguageAligner(
-            motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256
+            motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256,
+            use_clip_feat=self.use_clip_feat,
+            clip_feat_dim=self.clip_feat_dim,
+            clip_proj_dim=self.clip_proj_dim,
         ).to(device)
+        # Lazy CLIP B/32 (DataComp-XL) for runtime bbox-crop encoding. Tracker
+        # bboxes are NOT in the GT-keyed train cache, must extract live.
+        self._clip_model = None
+        self._clip_preprocess = None
+        if self.use_clip_feat:
+            import open_clip
+            from PIL import Image as _PILImage
+            self._PILImage = _PILImage
+            m, _, pp = open_clip.create_model_and_transforms(
+                "ViT-B-32", pretrained="datacomp_xl_s13b_b90k"
+            )
+            self._clip_model = m.to(device).eval()
+            for p in self._clip_model.parameters():
+                p.requires_grad = False
+            self._clip_preprocess = pp
         if checkpoint is not None:
             if isinstance(checkpoint, dict) and "model" in checkpoint:
                 self.aligner.load_state_dict(checkpoint["model"])
@@ -128,6 +153,36 @@ class GMCLinkManager:
 
         # Background residual buffer for noise floor estimation
         self.bg_residual_buffer: deque = deque(maxlen=frame_gap + 1)
+
+    def encode_clip_image_bboxes(
+        self,
+        frame: np.ndarray,
+        bboxes_xyxy: List[Tuple[int, int, int, int]],
+    ) -> torch.Tensor:
+        """Run CLIP B/32 image encoder on bbox crops. Returns (N, clip_feat_dim) fp32.
+        Used by both process_frame (1-pass) and FH V2 builder (2-pass)."""
+        if not self.use_clip_feat or self._clip_model is None:
+            raise RuntimeError("encode_clip_image_bboxes requires use_clip_feat=True ckpt")
+        if not bboxes_xyxy:
+            return torch.empty(0, self.clip_feat_dim, device=self.device)
+        import cv2 as _cv2
+        img_h, img_w = frame.shape[:2]
+        crops = []
+        for (bx1, by1, bx2, by2) in bboxes_xyxy:
+            bx1i = int(max(0, min(img_w - 1, bx1)))
+            by1i = int(max(0, min(img_h - 1, by1)))
+            bx2i = int(max(bx1i + 1, min(img_w, bx2)))
+            by2i = int(max(by1i + 1, min(img_h, by2)))
+            crop_bgr = frame[by1i:by2i, bx1i:bx2i]
+            if crop_bgr.size == 0:
+                crop_bgr = np.zeros((2, 2, 3), dtype=np.uint8)
+            crop_rgb = _cv2.cvtColor(crop_bgr, _cv2.COLOR_BGR2RGB)
+            pil = self._PILImage.fromarray(crop_rgb)
+            crops.append(self._clip_preprocess(pil))
+        crop_batch = torch.stack(crops, dim=0).to(self.device)
+        with torch.no_grad():
+            feats = self._clip_model.encode_image(crop_batch)
+        return feats.float()
 
     def _compute_dz_residual(
         self,
@@ -231,6 +286,8 @@ class GMCLinkManager:
 
         track_ids = []
         compensated_velocities = []
+        # CLIP path: collect bbox crops per appended track for batch encode after loop.
+        clip_bbox_xyxy: List[Tuple[int, int, int, int]] = []
         # Depth path: collect per-track raw dZ-per-gap, defer ego-Z comp until after loop
         per_track_z_now: Dict[int, float] = {}
         per_track_dz_raw: Dict[int, Dict[int, float]] = {}
@@ -429,6 +486,16 @@ class GMCLinkManager:
 
             track_ids.append(tid)
             compensated_velocities.append(spatial_motion)
+            if self.use_clip_feat:
+                if hasattr(track, "bbox") and track.bbox is not None:
+                    bx1, by1, bx2, by2 = track.bbox
+                    bx1i = int(max(0, min(img_w - 1, round(bx1))))
+                    by1i = int(max(0, min(img_h - 1, round(by1))))
+                    bx2i = int(max(bx1i + 1, min(img_w, round(bx2))))
+                    by2i = int(max(by1i + 1, min(img_h, round(by2))))
+                    clip_bbox_xyxy.append((bx1i, by1i, bx2i, by2i))
+                else:
+                    clip_bbox_xyxy.append((0, 0, 1, 1))
 
         # Post-loop: ego-Z compensation per gap (cohort median over stationary tracks)
         # Stationary criterion: residual mid-scale speed < 0.01 (≈1 px/frame at KITTI W=1242).
@@ -466,9 +533,15 @@ class GMCLinkManager:
             np.array(compensated_velocities), dtype=torch.float32
         ).to(self.device)
 
+        # Runtime CLIP B/32 forward on tracker bbox crops (Exp 39 path).
+        clip_tensor = None
+        if self.use_clip_feat and self._clip_model is not None:
+            clip_tensor = self.encode_clip_image_bboxes(frame, clip_bbox_xyxy)
+
         with torch.no_grad():
             motion_emb, lang_emb = self.aligner.encode(
-                motion_tensor, language_embedding.to(self.device)
+                motion_tensor, language_embedding.to(self.device),
+                clip_feats=clip_tensor,
             )
             # Cosine similarity with margin calibration → sigmoid to [0, 1]
             # Margin shifts the sigmoid reference point so that zero-similarity

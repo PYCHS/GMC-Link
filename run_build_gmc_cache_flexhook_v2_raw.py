@@ -59,6 +59,7 @@ def precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=384, 
     dummy_lang = torch.zeros(1, lang_dim, device=DEVICE)
     keys = []
     motions = []
+    clip_feats_list = []
     total_frames = len(frame_files)
     for f0 in tqdm(range(total_frames), desc=f"motion-{seq}"):
         f1 = f0 + 1
@@ -81,20 +82,30 @@ def precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=384, 
             frame_img, active, dummy_lang, detections=det_arr, update_state=True,
             depth_z_lookup=depth_z_lookup, seq=seq,
         )
+        # CLIP path: encode bbox crops in same insertion order as velocities.
+        if linker.use_clip_feat and velocities:
+            bbox_lookup = {oid: (int(x), int(y), int(x + w), int(y + h))
+                           for oid, x, y, w, h in dets}
+            ordered_bboxes = [bbox_lookup[oid] for oid in velocities.keys()]
+            clip_batch = linker.encode_clip_image_bboxes(frame_img, ordered_bboxes)
+            clip_feats_list.extend(list(clip_batch.cpu().numpy()))
         for oid, vec in velocities.items():
             keys.append((f1, oid))
             motions.append(vec)
-    return linker, keys, motions
+    return linker, keys, motions, clip_feats_list
 
 
-def project_motion(linker, motions, lang_dim=384):
+def project_motion(linker, motions, lang_dim=384, clip_feats_list=None):
     """Pass 2: aligner.encode → L2-normalized motion embeddings (N, 256)."""
     if not motions:
         return torch.empty(0, 256, device=DEVICE)
     motion_tensor = torch.tensor(np.array(motions), dtype=torch.float32).to(DEVICE)
     dummy_lang = torch.zeros(1, lang_dim, device=DEVICE)
+    clip_tensor = None
+    if linker.use_clip_feat and clip_feats_list:
+        clip_tensor = torch.tensor(np.array(clip_feats_list), dtype=torch.float32).to(DEVICE)
     with torch.no_grad():
-        motion_emb, _ = linker.aligner.encode(motion_tensor, dummy_lang)
+        motion_emb, _ = linker.aligner.encode(motion_tensor, dummy_lang, clip_feats=clip_tensor)
     return motion_emb  # (N, 256)
 
 
@@ -164,9 +175,9 @@ def build(seq):
     frame_files = sorted(f for f in os.listdir(seq_frame_dir) if f.endswith((".png", ".jpg")))
     print(f"  {len(expr_to_raw)} exprs, {len(frame_files)} frames, {sum(len(v) for v in ns_tracks.values())} dets total")
 
-    linker, keys, motions = precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=lang_dim, depth_cache=depth_cache, world_xy=world_xy)
-    print(f"  motion pass: {len(keys)} (fid,oid) entries", flush=True)
-    motion_emb = project_motion(linker, motions, lang_dim=lang_dim)
+    linker, keys, motions, clip_feats_list = precompute_motion(seq, ns_tracks, frame_files, seq_frame_dir, lang_dim=lang_dim, depth_cache=depth_cache, world_xy=world_xy)
+    print(f"  motion pass: {len(keys)} (fid,oid) entries, clip_feats={len(clip_feats_list)}", flush=True)
+    motion_emb = project_motion(linker, motions, lang_dim=lang_dim, clip_feats_list=clip_feats_list)
     print(f"  motion_emb: {tuple(motion_emb.shape)}", flush=True)
 
     cache = {}
