@@ -47,6 +47,45 @@ def load_ikun_logits(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["frame", "track_id", "ikun_logit"])
 
 
+def load_detector_hits(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
+    """Per (frame, track_id) detector-hit indicator.
+
+    Reads det_cache/DDETR-kitti/<seq>/<class>/dets.json. Class is inferred from
+    expression family ('car' for *-cars / *-vehicles, 'pedestrian' for
+    pedestrian-*).
+
+    Real cache schema wraps detections under a 'frames' key:
+      {"seq": ..., "frames": {frame_str: [[x1,y1,x2,y2,score], ...]}}
+    Flat dict schema (test fixture + legacy): {frame_str: [[x1,y1,x2,y2,score,track_id?], ...]}
+    When track_id is absent (5-element det), track_id is set to -1.
+    """
+    cls = _expr_class(expr)
+    det_path = repo_root / "det_cache" / "DDETR-kitti" / seq / cls / "dets.json"
+    if not det_path.exists():
+        return pd.DataFrame(columns=["frame", "track_id", "detector_hit"])
+    raw = json.loads(det_path.read_text())
+    # Handle real cache format where frame data lives under 'frames' key
+    if "frames" in raw and isinstance(raw["frames"], dict):
+        frame_dict = raw["frames"]
+    else:
+        frame_dict = {k: v for k, v in raw.items()
+                      if k not in {"seq", "class", "img_h", "img_w", "score_thr", "schema"}}
+    rows = []
+    for frame_str, dets in frame_dict.items():
+        frame = int(frame_str)
+        for det in dets:
+            # det = [x1,y1,x2,y2,score,track_id] OR [x1,y1,x2,y2,score]
+            track_id = int(det[5]) if len(det) >= 6 else -1
+            rows.append((frame, track_id, 1))
+    return pd.DataFrame(rows, columns=["frame", "track_id", "detector_hit"])
+
+
+def _expr_class(expr: str) -> str:
+    if expr.startswith("pedestrian"):
+        return "pedestrian"
+    return "car"
+
+
 def _expr_match(cache_expr: str, target: str) -> bool:
     """True if cache_expr matches the target family.
 

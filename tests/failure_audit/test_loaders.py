@@ -45,3 +45,22 @@ def test_load_ikun_logits_flattens_nested_json(tmp_path):
     assert list(df.columns) == ["frame", "track_id", "ikun_logit"]
     assert set(df["frame"]) == {1, 2}
     assert df.loc[df.frame == 1, "ikun_logit"].iloc[0] == -0.12
+
+
+from diagnostics.failure_audit.loaders import load_detector_hits
+
+
+def test_load_detector_hits_returns_per_frame_track_presence(tmp_path):
+    # det_cache/DDETR-kitti/<seq>/<class>/dets.json layout
+    # We expect: {frame: [[x1,y1,x2,y2,score,track_id], ...]} or similar
+    layout = {
+        "1": [[100, 200, 150, 280, 0.9, 5]],
+        "2": [[102, 201, 152, 281, 0.85, 5]],
+    }
+    d = tmp_path / "det_cache" / "DDETR-kitti" / "0011" / "car"
+    d.mkdir(parents=True)
+    (d / "dets.json").write_text(json.dumps(layout))
+    df = load_detector_hits(tmp_path, seq="0011", expr="turning-cars")
+    assert list(df.columns) == ["frame", "track_id", "detector_hit"]
+    assert df["detector_hit"].eq(1).all()
+    assert len(df) == 2
