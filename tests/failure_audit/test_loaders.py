@@ -111,3 +111,22 @@ def test_load_gmc_scores_reads_json_seed1(tmp_path):
     assert list(df.columns) == ["frame", "track_id", "aligner_gmc_score"]
     assert len(df) == 2
     assert abs(df.loc[df.frame == 1, "aligner_gmc_score"].iloc[0] - 0.42) < 1e-5
+
+
+from diagnostics.failure_audit.loaders import compute_fusion_gate
+
+
+def test_fusion_gate_motion_axis_for_turning_cars():
+    # turning-cars is a MOVING-class expr → motion-axis recipe.
+    # fusion = ikun_logit + alpha_motion * scale_motion * gmc_score + thr_motion
+    score = compute_fusion_gate(ikun_logit=-0.5, gmc_score=0.8, expr="turning-cars")
+    # = -0.5 + 1.0 * 0.9 * 0.8 + 0.17 = -0.5 + 0.72 + 0.17 = 0.39
+    assert abs(score - 0.39) < 1e-5
+
+
+def test_fusion_gate_appear_axis_for_pedestrian_walking():
+    # pedestrian-walking is MOVING but cascade memory shows appearance-axis tuning
+    # is the iKUN ship default; tested against the locked appearance recipe.
+    score = compute_fusion_gate(ikun_logit=-0.1, gmc_score=0.5, expr="pedestrian-walking")
+    # = -0.1 + 1.0 * 0.9 * 0.5 + 0.17 = -0.1 + 0.45 + 0.17 = 0.52
+    assert abs(score - 0.52) < 1e-5

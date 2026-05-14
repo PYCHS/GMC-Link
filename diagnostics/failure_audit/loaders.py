@@ -162,3 +162,19 @@ def _expr_match(cache_expr: str, target: str) -> bool:
                cache_expr in {"persons-who-are-walking", "people-who-are-walking",
                               "walking-pedestrian"}
     return cache_expr == target
+
+
+SHIP_ALPHA_MOTION  = 1.0
+SHIP_SCALE_MOTION  = 0.9
+SHIP_THR_MOTION    = 0.17
+
+
+def compute_fusion_gate(ikun_logit: float, gmc_score: float, expr: str) -> float:
+    """Apply ship-recipe motion-axis fusion. All 3 target families are MOVING.
+
+    Recipe (memory: project_ikun_scalematched_positive):
+        fused = ikun_logit + alpha * scale * gmc_score + thr
+    """
+    return (ikun_logit
+            + SHIP_ALPHA_MOTION * SHIP_SCALE_MOTION * gmc_score
+            + SHIP_THR_MOTION)
