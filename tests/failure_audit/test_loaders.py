@@ -86,3 +86,28 @@ def test_tracker_assoc_marks_switch_and_lost(tmp_path):
     assert row["tracker_assoc"] == "stable"
     row = df[(df.frame == 4) & (df.track_id == 5)].iloc[0]
     assert row["tracker_assoc"] == "lost"
+
+
+from diagnostics.failure_audit.loaders import load_gmc_scores
+
+
+def test_load_gmc_scores_reads_json_seed1(tmp_path):
+    # Real cache layout: gmc_link/gmc_scores_v1_<seq>_depth_seed1_cache.json
+    # Schema: {expr: {frame_str: {track_id_str: score_float}}}
+    cache = {
+        "turning-cars": {
+            "1": {"5": 0.42},
+            "2": {"5": 0.51},
+        },
+        "moving-vehicles": {
+            "3": {"7": 0.88},
+        },
+    }
+    gmc_dir = tmp_path / "gmc_link"
+    gmc_dir.mkdir()
+    (gmc_dir / "gmc_scores_v1_0011_depth_seed1_cache.json").write_text(json.dumps(cache))
+
+    df = load_gmc_scores(tmp_path, seq="0011", expr="turning-cars")
+    assert list(df.columns) == ["frame", "track_id", "aligner_gmc_score"]
+    assert len(df) == 2
+    assert abs(df.loc[df.frame == 1, "aligner_gmc_score"].iloc[0] - 0.42) < 1e-5

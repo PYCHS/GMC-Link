@@ -124,6 +124,34 @@ def load_tracker_assoc(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
     return df[["frame", "track_id", "tracker_assoc"]]
 
 
+def load_gmc_scores(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
+    """Per (frame, track_id) GMC aligner cosine from depth-aug seed-1 JSON cache.
+
+    Cache schema: {expr: {frame_str: {track_id_str: score_float}}}.
+    For family targets (e.g. pedestrian-walking), score is the mean across
+    matched exprs for that (frame, track_id).
+    """
+    cache_path = (repo_root / "gmc_link" /
+                  f"gmc_scores_v1_{seq}_depth_seed1_cache.json")
+    if not cache_path.exists():
+        return pd.DataFrame(columns=["frame", "track_id", "aligner_gmc_score"])
+    cache = json.loads(cache_path.read_text())
+    matched_exprs = [k for k in cache.keys() if _expr_match(k, expr)]
+    if not matched_exprs:
+        return pd.DataFrame(columns=["frame", "track_id", "aligner_gmc_score"])
+    rows: dict[tuple[int, int], list[float]] = {}
+    for me in matched_exprs:
+        for frame_str, track_dict in cache[me].items():
+            frame = int(frame_str)
+            for track_str, score in track_dict.items():
+                key = (frame, int(track_str))
+                rows.setdefault(key, []).append(float(score))
+    return pd.DataFrame([
+        {"frame": k[0], "track_id": k[1], "aligner_gmc_score": float(np.mean(v))}
+        for k, v in rows.items()
+    ])
+
+
 def _expr_match(cache_expr: str, target: str) -> bool:
     """True if cache_expr matches the target family.
 
