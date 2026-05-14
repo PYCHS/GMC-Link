@@ -15,7 +15,7 @@ def test_load_gt_returns_dataframe_with_required_columns(tmp_path):
         "3,7,300,400,60,90,1,1,1\n"
     )
     df = load_gt(tmp_path, seq="0011", expr="turning-cars")
-    assert list(df.columns) == ["frame", "track_id", "gt_match"]
+    assert {"frame", "track_id", "x", "y", "w", "h", "gt_match"} <= set(df.columns)
     assert len(df) == 3
     assert df["gt_match"].eq(1).all()
     assert df["track_id"].dtype.kind in {"i", "u"}
@@ -81,7 +81,7 @@ def test_tracker_assoc_marks_switch_and_lost(tmp_path):
         "5,7,300,400,60,90,0.9\n"   # new track 7, no prior history → stable (fresh)
     )
     df = load_tracker_assoc(tmp_path, seq="0011", expr="turning-cars")
-    assert set(df.columns) == {"frame", "track_id", "tracker_assoc"}
+    assert {"frame", "track_id", "tracker_assoc"} <= set(df.columns)
     row = df[(df.frame == 2) & (df.track_id == 5)].iloc[0]
     assert row["tracker_assoc"] == "stable"
     row = df[(df.frame == 4) & (df.track_id == 5)].iloc[0]

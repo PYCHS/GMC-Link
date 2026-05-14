@@ -10,17 +10,23 @@ import numpy as np
 
 
 def load_gt(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
-    """Load GT track presence for (seq, expr) from refer-kitti/gt_template_old/."""
+    """Load GT track + bbox for (seq, expr) from refer-kitti/gt_template_old/.
+
+    KITTI-MOT-style: frame, track_id, x, y, w, h, vis, ?, ?
+    Returns columns: frame, track_id, x, y, w, h, gt_match=1.
+    """
     gt_path = repo_root / "refer-kitti" / "gt_template_old" / seq / expr / "gt.txt"
     if not gt_path.exists():
-        return pd.DataFrame(columns=["frame", "track_id", "gt_match"])
+        return pd.DataFrame(columns=["frame","track_id","x","y","w","h","gt_match"])
     rows = []
     for line in gt_path.read_text().splitlines():
         parts = line.strip().split(",")
-        if len(parts) < 2:
+        if len(parts) < 6:
             continue
-        rows.append((int(parts[0]), int(parts[1])))
-    df = pd.DataFrame(rows, columns=["frame", "track_id"])
+        rows.append((int(parts[0]), int(parts[1]),
+                     float(parts[2]), float(parts[3]),
+                     float(parts[4]), float(parts[5])))
+    df = pd.DataFrame(rows, columns=["frame","track_id","x","y","w","h"])
     df["gt_match"] = 1
     return df
 
@@ -103,15 +109,19 @@ def load_tracker_assoc(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
     cls = _expr_class(expr)
     pred_path = repo_root / "NeuralSORT" / seq / cls / "predict.txt"
     if not pred_path.exists():
-        return pd.DataFrame(columns=["frame", "track_id", "tracker_assoc"])
+        return pd.DataFrame(columns=["frame","track_id","x","y","w","h","tracker_assoc"])
     raw = []
     for line in pred_path.read_text().splitlines():
         parts = line.strip().split(",")
         if len(parts) < 6:
             continue
         raw.append({
-            "frame": int(parts[0]),
+            "frame":    int(parts[0]),
             "track_id": int(parts[1]),
+            "x":        float(parts[2]),
+            "y":        float(parts[3]),
+            "w":        float(parts[4]),
+            "h":        float(parts[5]),
         })
     df = pd.DataFrame(raw)
     df = df.sort_values(["track_id", "frame"]).reset_index(drop=True)
@@ -121,7 +131,7 @@ def load_tracker_assoc(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
         np.where(df["frame"] - df["prev_frame"] == 1,  "stable",
                                                         "lost")
     )
-    return df[["frame", "track_id", "tracker_assoc"]]
+    return df[["frame","track_id","x","y","w","h","tracker_assoc"]]
 
 
 def load_gmc_scores(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:

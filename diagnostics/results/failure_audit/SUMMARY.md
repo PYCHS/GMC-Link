@@ -64,8 +64,59 @@ Remaining work: per-row T8 attribution for `pedestrian-who-are-walking`
 × 0011 only. If that cell also attributes to a single dominant stage,
 the audit yields a sharper next-experiment recommendation.
 
+## Per-row attribution — `pedestrian-who-are-walking` × 0011
+
+The only cell with non-zero iKUN coverage (44.6 %). Per-row table joined via
+GT-bbox ↔ NeuralSORT-bbox IoU at threshold 0.5. **Caveat:** the iKUN
+cascade cache stores logits under *annotation* track IDs (from
+`expression/0011/<expr>.json`), while NeuralSORT predicts under
+tracker-output IDs — different namespaces. Frames 11+ show no ID overlap
+between the two, so the IoU bridge under-counts genuine matches. Numbers
+below are an upper bound on coverage-side FN, lower bound on
+aligner/fusion FN.
+
+| class            |  n |   pct |
+|------------------|---:|------:|
+| FN_ikun_coverage | 50 | 55.6 % |
+| FN_tracker       | 19 | 21.1 % |
+| FN_detector      |  1 |  1.1 % |
+| FN_aligner       |  1 |  1.1 % |
+| FN_fusion        |  0 |  0.0 % |
+| TP / FP          |  0 |  0.0 % |
+| TN (unclassified)| 19 | 21.1 % |
+
+`TN` rows here are GT positives where IoU bridged GT → tracker (stable,
+high IoU, strong GMC score) **but iKUN cache had no logit for that
+(frame, tracker_id)** — i.e. iKUN sub-samples by annotation namespace and
+the NS track this GT IoU-matched is absent from iKUN's processed set.
+Effectively a finer-grained **FN_ikun_coverage**.
+
+Pooling FN_ikun_coverage + the TN bucket: **76.7 %** of FNs on this cell
+are upstream of detector/tracker/aligner/fusion as well. Combined with
+the two turning-verb cells (100 % FN_ikun_coverage), the audit's dominant
+finding holds: **iKUN-side coverage is the bottleneck**, not any recipe
+lever.
+
+## Decision
+
+`coverage + ikun_track_miss` ≥ 60 % across **all 3 cells** → "lever found"
+at the **iKUN sub-sampling stage**. Door closes on aligner/fusion levers
+for these expressions. Two viable next directions:
+
+1. **Expand iKUN's V1 frame sampling** beyond the current frame-114 cap
+   on 0011 (would address turning-cars/0011 + turning-vehicles/0011).
+2. **Process all NeuralSORT-tracked boxes** through iKUN at GT-overlapping
+   frames (would address the pedestrian-who-are-walking cell).
+
+Both are upstream of GMC-Link and require modifying iKUN's eval driver,
+not the alignment/fusion code we've been iterating on.
+
 ## Artifacts
 
-- `diagnostics/results/failure_audit/coverage_recon.md` — this table
-- `diagnostics/results/failure_audit/coverage_recon.json` — raw counts
-- `diagnostics/failure_audit/coverage_recon.py` — script
+- `diagnostics/failure_audit/coverage_recon.py` — recon script
+- `diagnostics/failure_audit/build_table.py` — per-row joiner
+- `diagnostics/failure_audit/attribute.py`   — 7-class decision tree
+- `diagnostics/failure_audit/run_audit.py`   — driver
+- `diagnostics/results/failure_audit/coverage_recon.md` — coverage table
+- `diagnostics/results/failure_audit/attribution.md`    — per-row counts
+- `diagnostics/results/failure_audit/audit_pedestrian-who-are-walking_0011.csv`
