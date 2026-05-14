@@ -31,15 +31,27 @@ class CellStatus:
 
 
 def inventory_cells(repo_root: Path) -> List[CellStatus]:
-    out = []
+    """Cache-presence check per (expr, seq) cell.
+
+    Path corrections vs initial plan after recon on 2026-05-14:
+      - iKUN cascade JSON containing all 3 seqs is `cascade_full.json`
+        (plain `cascade.json` is 0011-only).
+      - GMC depth-aug per-(frame, track) cache lives under
+        `gmc_link/gmc_scores_v1_<seq>_depth_seed1_cache.json` (JSON, not npz).
+        The npz under `diagnostics/results/depth_v1train/` is per-expr aggregate
+        statistics and has no frame/track key — unusable for per-row joining.
+      - GT lives under the `refer-kitti/` symlink (paper-canonical
+        `gt_template_old/`); the repo root has no top-level `gt_template_old/`.
+    """
+    out: List[CellStatus] = []
     for expr, seq in TARGET_CELLS:
         out.append(CellStatus(
             expr=expr,
             seq=seq,
-            ikun_present=(repo_root / "iKUN" / "ikun_results_v1_cascade.json").exists(),
-            gmc_present=(repo_root / "diagnostics" / "results" / "depth_v1train" /
-                         f"layer3_{seq}_depth_seed1.npz").exists(),
+            ikun_present=(repo_root / "iKUN" / "ikun_results_v1_cascade_full.json").exists(),
+            gmc_present=(repo_root / "gmc_link" /
+                         f"gmc_scores_v1_{seq}_depth_seed1_cache.json").exists(),
             det_present=(repo_root / "det_cache" / "DDETR-kitti" / seq).exists(),
-            gt_present=(repo_root / "gt_template_old" / seq).exists(),
+            gt_present=(repo_root / "refer-kitti" / "gt_template_old" / seq).exists(),
         ))
     return out

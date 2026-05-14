@@ -53,19 +53,36 @@ TARGET_CELLS = [
 
 ```python
 SHIP_RECIPE = {
-    "ikun_cache":   "iKUN/ikun_results_v1_cascade.json",
+    "ikun_cache":   "iKUN/ikun_results_v1_cascade_full.json",
     "gmc_seed":     1,
-    "gmc_cache":    "diagnostics/results/depth_v1train/layer3_{seq}_depth_seed1.npz",
+    "gmc_cache":    "gmc_link/gmc_scores_v1_{seq}_depth_seed1_cache.json",
     "alpha_motion": 1.0,
     "scale_motion": 0.9,
     "thr_motion":   0.17,
     "alpha_appear": 1.0,
     "scale_appear": 0.30,
     "thr_appear":   0.10,
-    "gt_root":      "gt_template_old/",
+    "gt_root":      "refer-kitti/gt_template_old/",
     "det_root":     "det_cache/DDETR-kitti/",
+    "tracker_root": "NeuralSORT/",
 }
 ```
+
+### Path Corrections (2026-05-14 schema recon)
+
+After Task 1 reviewer flagged missing `gt_template_old/` at repo root, recon revealed
+4 path/schema mismatches vs the original spec assumptions. All Task 2–8 code blocks
+below reflect the corrected paths:
+
+| Source | Plan-v0 path | Corrected path |
+|---|---|---|
+| iKUN logit | `iKUN/ikun_results_v1_cascade_full.json` (0011 only) | `iKUN/ikun_results_v1_cascade_full.json` (all 3 seqs) |
+| GMC score | `diagnostics/results/depth_v1train/layer3_<seq>_depth_seed1.npz` (per-expr aggregate, no frame/track key) | `gmc_link/gmc_scores_v1_<seq>_depth_seed1_cache.json` (`{expr:{frame:{track:score}}}`) |
+| GT | `gt_template_old/<seq>/<expr>/gt.txt` | `refer-kitti/gt_template_old/<seq>/<expr>/gt.txt` |
+| Tracker | `NeuralSORT/<seq>/predict.txt` | `NeuralSORT/<seq>/<class>/predict.txt` (split by car/pedestrian) |
+
+Live inventory at repo root with corrected paths: all 5 cells return `ALL=True`.
+`hooks.py` is therefore not needed; the audit runs purely off existing caches.
 
 ---
 
@@ -103,7 +120,7 @@ from diagnostics.failure_audit.inventory import inventory_cells, CellStatus, TAR
 def test_inventory_returns_one_status_per_cell(tmp_path):
     repo_root = tmp_path
     (repo_root / "iKUN").mkdir()
-    (repo_root / "iKUN" / "ikun_results_v1_cascade.json").write_text("{}")
+    (repo_root / "iKUN" / "ikun_results_v1_cascade_full.json").write_text("{}")
     statuses = inventory_cells(repo_root)
     assert len(statuses) == len(TARGET_CELLS)
     for s in statuses:
@@ -114,7 +131,7 @@ def test_inventory_returns_one_status_per_cell(tmp_path):
 def test_inventory_flags_missing_gmc_seed1_cache(tmp_path):
     repo_root = tmp_path
     (repo_root / "iKUN").mkdir()
-    (repo_root / "iKUN" / "ikun_results_v1_cascade.json").write_text("{}")
+    (repo_root / "iKUN" / "ikun_results_v1_cascade_full.json").write_text("{}")
     statuses = inventory_cells(repo_root)
     # No depth_v1train caches written → all cells must flag gmc missing
     assert all(not s.gmc_present for s in statuses)
@@ -169,7 +186,7 @@ def inventory_cells(repo_root: Path) -> List[CellStatus]:
         out.append(CellStatus(
             expr=expr,
             seq=seq,
-            ikun_present=(repo_root / "iKUN" / "ikun_results_v1_cascade.json").exists(),
+            ikun_present=(repo_root / "iKUN" / "ikun_results_v1_cascade_full.json").exists(),
             gmc_present=(repo_root / "diagnostics" / "results" / "depth_v1train" /
                          f"layer3_{seq}_depth_seed1.npz").exists(),
             det_present=(repo_root / "det_cache" / "DDETR-kitti" / seq).exists(),
@@ -212,8 +229,8 @@ from diagnostics.failure_audit.loaders import load_gt
 
 def test_load_gt_returns_dataframe_with_required_columns(tmp_path):
     # Build a synthetic gt_template_old layout matching the real format:
-    #   gt_template_old/<seq>/<expr>/gt.txt   (frame,id,...)
-    seq_dir = tmp_path / "gt_template_old" / "0011" / "turning-cars"
+    #   refer-kitti/gt_template_old/<seq>/<expr>/gt.txt   (frame,id,...)
+    seq_dir = tmp_path / "refer-kitti" / "gt_template_old" / "0011" / "turning-cars"
     seq_dir.mkdir(parents=True)
     (seq_dir / "gt.txt").write_text(
         "1,5,100,200,50,80,1,1,1\n"
@@ -250,8 +267,8 @@ import numpy as np
 
 
 def load_gt(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
-    """Load GT track presence for (seq, expr) from gt_template_old/."""
-    gt_path = repo_root / "gt_template_old" / seq / expr / "gt.txt"
+    """Load GT track presence for (seq, expr) from refer-kitti/gt_template_old/."""
+    gt_path = repo_root / "refer-kitti" / "gt_template_old" / seq / expr / "gt.txt"
     if not gt_path.exists():
         return pd.DataFrame(columns=["frame", "track_id", "gt_match"])
     rows = []
@@ -311,7 +328,7 @@ def test_load_ikun_logits_flattens_nested_json(tmp_path):
     }
     p = tmp_path / "iKUN"
     p.mkdir()
-    (p / "ikun_results_v1_cascade.json").write_text(json.dumps(cache))
+    (p / "ikun_results_v1_cascade_full.json").write_text(json.dumps(cache))
     df = load_ikun_logits(tmp_path, seq="0011", expr="turning-cars")
     assert list(df.columns) == ["frame", "track_id", "ikun_logit"]
     assert set(df["frame"]) == {1, 2}
@@ -337,7 +354,7 @@ def load_ikun_logits(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
     name *startswith* the given family token (e.g. pedestrian-walking-women,
     pedestrian-walking-men); ikun_logit is the mean across matched exprs.
     """
-    cache_path = repo_root / "iKUN" / "ikun_results_v1_cascade.json"
+    cache_path = repo_root / "iKUN" / "ikun_results_v1_cascade_full.json"
     cache = json.loads(cache_path.read_text())
     seq_data = cache.get(seq, {})
     rows = []
@@ -482,16 +499,16 @@ from diagnostics.failure_audit.loaders import load_tracker_assoc
 
 def test_tracker_assoc_marks_switch_and_lost(tmp_path):
     # predict.txt format: frame,track_id,x1,y1,w,h,conf,...
-    p = tmp_path / "NeuralSORT" / "0011"
+    # Real layout: NeuralSORT/<seq>/<class>/predict.txt where class is car/pedestrian
+    p = tmp_path / "NeuralSORT" / "0011" / "car"
     p.mkdir(parents=True)
     (p / "predict.txt").write_text(
         "1,5,100,200,50,80,0.9\n"
         "2,5,102,202,50,80,0.9\n"   # stable (5 continues)
-        "4,5,200,202,50,80,0.9\n"   # 5 reappears after frame 3 gap → lost@3 ignored
-                                      # but state at 4 = "lost" since gap > 1
+        "4,5,200,202,50,80,0.9\n"   # 5 reappears after frame 3 gap → lost@4
         "5,7,300,400,60,90,0.9\n"   # new track 7, no prior history → stable (fresh)
     )
-    df = load_tracker_assoc(tmp_path, seq="0011")
+    df = load_tracker_assoc(tmp_path, seq="0011", expr="turning-cars")
     assert set(df.columns) == {"frame", "track_id", "tracker_assoc"}
     row = df[(df.frame == 2) & (df.track_id == 5)].iloc[0]
     assert row["tracker_assoc"] == "stable"
@@ -510,17 +527,22 @@ Expected: ImportError
 
 ```python
 # append to diagnostics/failure_audit/loaders.py
-def load_tracker_assoc(repo_root: Path, seq: str) -> pd.DataFrame:
+def load_tracker_assoc(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
     """Per (frame, track_id) assoc state ∈ {stable, switched, lost}.
 
     Rule:
-      stable  — track existed in frame-1 and bbox center moved < 2x its diag
+      stable  — track existed in frame-1 (gap == 1) or has no prior history (fresh)
       lost    — track existed previously but had a gap > 1 frame
       switched— track existed in frame-1 and bbox center jumped > 2x diag
                 (impossible with single predict.txt without ID-tracking detector
                 output; reduced to lost-vs-stable for the v1 audit)
+
+    NeuralSORT layout: NeuralSORT/<seq>/<class>/predict.txt where class is
+    inferred from expression family (car for *-cars/*-vehicles, pedestrian for
+    pedestrian-*).
     """
-    pred_path = repo_root / "NeuralSORT" / seq / "predict.txt"
+    cls = _expr_class(expr)
+    pred_path = repo_root / "NeuralSORT" / seq / cls / "predict.txt"
     if not pred_path.exists():
         return pd.DataFrame(columns=["frame", "track_id", "tracker_assoc"])
     raw = []
@@ -572,56 +594,70 @@ git commit -m "feat(audit): tracker assoc loader (stable/lost from gap rule)"
 from diagnostics.failure_audit.loaders import load_gmc_scores
 
 
-def test_load_gmc_scores_reads_npz_seed1(tmp_path):
-    # Expected npz layout (from existing depth_v1train cache):
-    #   frame_id : np.int32[N]
-    #   track_id : np.int32[N]
-    #   expr     : np.array(N, dtype=object)   # string expressions
-    #   gmc_score: np.float32[N]               # cosine ∈ [0,1]
-    npz_dir = tmp_path / "diagnostics" / "results" / "depth_v1train"
-    npz_dir.mkdir(parents=True)
-    np.savez(
-        npz_dir / "layer3_0011_depth_seed1.npz",
-        frame_id=np.array([1, 2, 3], dtype=np.int32),
-        track_id=np.array([5, 5, 7], dtype=np.int32),
-        expr=np.array(["turning-cars", "turning-cars", "moving-vehicles"], dtype=object),
-        gmc_score=np.array([0.42, 0.51, 0.88], dtype=np.float32),
-    )
+def test_load_gmc_scores_reads_json_seed1(tmp_path):
+    # Real cache layout: gmc_link/gmc_scores_v1_<seq>_depth_seed1_cache.json
+    # Schema: {expr: {frame_str: {track_id_str: score_float}}}
+    cache = {
+        "turning-cars": {
+            "1": {"5": 0.42},
+            "2": {"5": 0.51},
+        },
+        "moving-vehicles": {
+            "3": {"7": 0.88},
+        },
+    }
+    gmc_dir = tmp_path / "gmc_link"
+    gmc_dir.mkdir()
+    (gmc_dir / "gmc_scores_v1_0011_depth_seed1_cache.json").write_text(json.dumps(cache))
+
     df = load_gmc_scores(tmp_path, seq="0011", expr="turning-cars")
     assert list(df.columns) == ["frame", "track_id", "aligner_gmc_score"]
     assert len(df) == 2
-    assert abs(df["aligner_gmc_score"].iloc[0] - 0.42) < 1e-5
+    assert abs(df.loc[df.frame == 1, "aligner_gmc_score"].iloc[0] - 0.42) < 1e-5
 ```
 
 - [ ] **Step 6.2: Run test, expect fail**
 
 ```bash
-pytest tests/failure_audit/test_loaders.py::test_load_gmc_scores_reads_npz_seed1 -v
+pytest tests/failure_audit/test_loaders.py::test_load_gmc_scores_reads_json_seed1 -v
 ```
 Expected: ImportError
 
 - [ ] **Step 6.3: Implement `load_gmc_scores`**
 
-NOTE: real npz schema must be confirmed by reading one of the existing
-`layer3_<seq>_depth_seed1.npz` files during D1. If the real keys differ
-(e.g., `frames`, `tracks`, `scores`), update the implementation here. Do NOT
-silently rename.
+Schema confirmed against `gmc_link/gmc_scores_v1_0011_depth_seed1_cache.json` on
+2026-05-14: `{expr: {frame_str: {track_id_str: score_float}}}`. For
+`pedestrian-walking`, this is a family — mean across all matching exprs per
+(frame, track).
 
 ```python
 # append to diagnostics/failure_audit/loaders.py
 def load_gmc_scores(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
-    """Per (frame, track_id) GMC aligner cosine from depth-aug seed-1 cache."""
-    npz_path = (repo_root / "diagnostics" / "results" / "depth_v1train" /
-                f"layer3_{seq}_depth_seed1.npz")
-    if not npz_path.exists():
+    """Per (frame, track_id) GMC aligner cosine from depth-aug seed-1 JSON cache.
+
+    Cache schema: {expr: {frame_str: {track_id_str: score_float}}}.
+    For family targets (e.g. pedestrian-walking), score is the mean across
+    matched exprs for that (frame, track_id).
+    """
+    cache_path = (repo_root / "gmc_link" /
+                  f"gmc_scores_v1_{seq}_depth_seed1_cache.json")
+    if not cache_path.exists():
         return pd.DataFrame(columns=["frame", "track_id", "aligner_gmc_score"])
-    data = np.load(npz_path, allow_pickle=True)
-    mask = np.array([_expr_match(str(e), expr) for e in data["expr"]])
-    return pd.DataFrame({
-        "frame":             data["frame_id"][mask].astype(int),
-        "track_id":          data["track_id"][mask].astype(int),
-        "aligner_gmc_score": data["gmc_score"][mask].astype(float),
-    })
+    cache = json.loads(cache_path.read_text())
+    matched_exprs = [k for k in cache.keys() if _expr_match(k, expr)]
+    if not matched_exprs:
+        return pd.DataFrame(columns=["frame", "track_id", "aligner_gmc_score"])
+    rows: dict[tuple[int, int], list[float]] = {}
+    for me in matched_exprs:
+        for frame_str, track_dict in cache[me].items():
+            frame = int(frame_str)
+            for track_str, score in track_dict.items():
+                key = (frame, int(track_str))
+                rows.setdefault(key, []).append(float(score))
+    return pd.DataFrame([
+        {"frame": k[0], "track_id": k[1], "aligner_gmc_score": float(np.mean(v))}
+        for k, v in rows.items()
+    ])
 ```
 
 - [ ] **Step 6.4: Run test**
@@ -631,19 +667,7 @@ pytest tests/failure_audit/test_loaders.py -v
 ```
 Expected: 5 passed
 
-- [ ] **Step 6.5: Schema-confirm against a real npz**
-
-```bash
-python -c "import numpy as np; \
-d = np.load('diagnostics/results/depth_v1train/layer3_0011_depth_seed1.npz', \
-            allow_pickle=True); print(list(d.keys())); \
-print({k: d[k].shape for k in d.keys()})"
-```
-Expected: print the actual keys. If they differ from {`frame_id`, `track_id`, `expr`,
-`gmc_score`}, edit `load_gmc_scores` AND the test fixture above to match, re-run pytest
-(must stay green), then proceed.
-
-- [ ] **Step 6.6: Commit**
+- [ ] **Step 6.5: Commit**
 
 ```bash
 git add diagnostics/failure_audit/loaders.py tests/failure_audit/test_loaders.py
@@ -744,31 +768,28 @@ from diagnostics.failure_audit.build_table import build_audit_table
 def _seed_repo(tmp_path: Path):
     """Build minimum viable cache layout for one (seq, expr) cell."""
     seq, expr = "0011", "turning-cars"
-    # GT
-    gt_dir = tmp_path / "gt_template_old" / seq / expr
+    # GT (under refer-kitti/ symlink namespace)
+    gt_dir = tmp_path / "refer-kitti" / "gt_template_old" / seq / expr
     gt_dir.mkdir(parents=True)
     (gt_dir / "gt.txt").write_text("1,5,0,0,0,0,1,1,1\n2,5,0,0,0,0,1,1,1\n")
-    # iKUN logits
+    # iKUN logits (cascade_full, all-seq cache)
     (tmp_path / "iKUN").mkdir()
-    (tmp_path / "iKUN" / "ikun_results_v1_cascade.json").write_text(json.dumps({
+    (tmp_path / "iKUN" / "ikun_results_v1_cascade_full.json").write_text(json.dumps({
         seq: {"1": {"5": {expr: [-0.5]}}, "2": {"5": {expr: [0.3]}}}
     }))
     # Det
     d = tmp_path / "det_cache" / "DDETR-kitti" / seq / "car"
     d.mkdir(parents=True)
     (d / "dets.json").write_text(json.dumps({"1": [[0,0,0,0,0.9,5]], "2": [[0,0,0,0,0.9,5]]}))
-    # Tracker
-    (tmp_path / "NeuralSORT" / seq).mkdir(parents=True)
-    (tmp_path / "NeuralSORT" / seq / "predict.txt").write_text("1,5,0,0,0,0,0.9\n2,5,0,0,0,0,0.9\n")
-    # GMC
-    npz_dir = tmp_path / "diagnostics" / "results" / "depth_v1train"
-    npz_dir.mkdir(parents=True)
-    np.savez(
-        npz_dir / f"layer3_{seq}_depth_seed1.npz",
-        frame_id=np.array([1, 2], dtype=np.int32),
-        track_id=np.array([5, 5], dtype=np.int32),
-        expr=np.array([expr, expr], dtype=object),
-        gmc_score=np.array([0.8, 0.4], dtype=np.float32),
+    # Tracker (per-class subdir)
+    (tmp_path / "NeuralSORT" / seq / "car").mkdir(parents=True)
+    (tmp_path / "NeuralSORT" / seq / "car" / "predict.txt").write_text(
+        "1,5,0,0,0,0,0.9\n2,5,0,0,0,0,0.9\n"
+    )
+    # GMC (per-track JSON cache)
+    (tmp_path / "gmc_link").mkdir()
+    (tmp_path / "gmc_link" / f"gmc_scores_v1_{seq}_depth_seed1_cache.json").write_text(
+        json.dumps({expr: {"1": {"5": 0.8}, "2": {"5": 0.4}}})
     )
 
 
@@ -830,7 +851,7 @@ def build_audit_table(repo_root: Path, seq: str, expr: str) -> pd.DataFrame:
 
     gt = load_gt(repo_root, seq=seq, expr=expr)
     det = load_detector_hits(repo_root, seq=seq, expr=expr)
-    trk = load_tracker_assoc(repo_root, seq=seq)
+    trk = load_tracker_assoc(repo_root, seq=seq, expr=expr)
     gmc = load_gmc_scores(repo_root, seq=seq, expr=expr)
 
     df = base.merge(gt,  on=["frame", "track_id"], how="left")
