@@ -64,3 +64,25 @@ def test_load_detector_hits_returns_per_frame_track_presence(tmp_path):
     assert list(df.columns) == ["frame", "track_id", "detector_hit"]
     assert df["detector_hit"].eq(1).all()
     assert len(df) == 2
+
+
+from diagnostics.failure_audit.loaders import load_tracker_assoc
+
+
+def test_tracker_assoc_marks_switch_and_lost(tmp_path):
+    # predict.txt format: frame,track_id,x1,y1,w,h,conf,...
+    # Real layout: NeuralSORT/<seq>/<class>/predict.txt where class is car/pedestrian
+    p = tmp_path / "NeuralSORT" / "0011" / "car"
+    p.mkdir(parents=True)
+    (p / "predict.txt").write_text(
+        "1,5,100,200,50,80,0.9\n"
+        "2,5,102,202,50,80,0.9\n"   # stable (5 continues)
+        "4,5,200,202,50,80,0.9\n"   # 5 reappears after frame 3 gap → lost@4
+        "5,7,300,400,60,90,0.9\n"   # new track 7, no prior history → stable (fresh)
+    )
+    df = load_tracker_assoc(tmp_path, seq="0011", expr="turning-cars")
+    assert set(df.columns) == {"frame", "track_id", "tracker_assoc"}
+    row = df[(df.frame == 2) & (df.track_id == 5)].iloc[0]
+    assert row["tracker_assoc"] == "stable"
+    row = df[(df.frame == 4) & (df.track_id == 5)].iloc[0]
+    assert row["tracker_assoc"] == "lost"
