@@ -1,0 +1,102 @@
+[
+  {
+    "expr": "turning-cars",
+    "seq": "0011",
+    "cls": "car",
+    "n_gt_rows": 30,
+    "n_gt_frames": 30,
+    "gt_frame_range": [
+      309,
+      338
+    ],
+    "n_ikun_frames": 60,
+    "ikun_frame_range": [
+      1,
+      114
+    ],
+    "n_overlap_frames": 0,
+    "n_tracker_frames": 371,
+    "n_gmc_frames": 371,
+    "coverage_pct": 0.0
+  },
+  {
+    "expr": "turning-vehicles",
+    "seq": "0011",
+    "cls": "car",
+    "n_gt_rows": 30,
+    "n_gt_frames": 30,
+    "gt_frame_range": [
+      309,
+      338
+    ],
+    "n_ikun_frames": 60,
+    "ikun_frame_range": [
+      1,
+      114
+    ],
+    "n_overlap_frames": 0,
+    "n_tracker_frames": 371,
+    "n_gmc_frames": 371,
+    "coverage_pct": 0.0
+  },
+  {
+    "expr": "pedestrian-who-are-walking",
+    "seq": "0011",
+    "cls": "pedestrian",
+    "n_gt_rows": 90,
+    "n_gt_frames": 56,
+    "gt_frame_range": [
+      1,
+      56
+    ],
+    "n_ikun_frames": 60,
+    "ikun_frame_range": [
+      1,
+      114
+    ],
+    "n_overlap_frames": 25,
+    "n_tracker_frames": 44,
+    "n_gmc_frames": 371,
+    "coverage_pct": 44.642857142857146
+  },
+  {
+    "expr": "moving-cars",
+    "seq": "0011",
+    "cls": "car",
+    "n_gt_rows": 650,
+    "n_gt_frames": 316,
+    "gt_frame_range": [
+      1,
+      371
+    ],
+    "n_ikun_frames": 60,
+    "ikun_frame_range": [
+      1,
+      114
+    ],
+    "n_overlap_frames": 60,
+    "n_tracker_frames": 371,
+    "n_gmc_frames": 371,
+    "coverage_pct": 18.9873417721519
+  },
+  {
+    "expr": "parking-vehicles",
+    "seq": "0011",
+    "cls": "car",
+    "n_gt_rows": 2598,
+    "n_gt_frames": 354,
+    "gt_frame_range": [
+      1,
+      355
+    ],
+    "n_ikun_frames": 60,
+    "ikun_frame_range": [
+      1,
+      114
+    ],
+    "n_overlap_frames": 60,
+    "n_tracker_frames": 371,
+    "n_gmc_frames": 371,
+    "coverage_pct": 16.949152542372882
+  }
+]
