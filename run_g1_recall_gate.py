@@ -12,15 +12,14 @@ PASS criteria per spec:
   - recall ≥ 0.90 per seq per class
   - new_ratio ≥ 0.10 per seq per class (else net-neutral swap)
 """
+import argparse
 import json
 import os
 from collections import defaultdict
 
 NS_ROOT = "/home/seanachan/GMC-Link/NeuralSORT"
-GDINO_ROOT = "/home/seanachan/GMC-Link/det_cache/grounding_dino_v1"
 SEQS = ["0005", "0011", "0013"]
 CLASSES = ["car", "pedestrian"]
-IOU_THR = 0.5
 
 
 def iou_xyxy(a, b):
@@ -51,9 +50,9 @@ def load_ns(seq, cls):
     return by_frame
 
 
-def load_gdino(seq, cls):
+def load_gdino(seq, cls, gdino_root):
     """Return {fid_int: [(x1,y1,x2,y2), ...]} from G-DINO dets.json (xyxy)."""
-    path = os.path.join(GDINO_ROOT, seq, cls, "dets.json")
+    path = os.path.join(gdino_root, seq, cls, "dets.json")
     d = json.load(open(path))
     by_frame = defaultdict(list)
     for fid_str, boxes in d["frames"].items():
@@ -84,6 +83,15 @@ def match_frame(ns_boxes, gdino_boxes, iou_thr):
 
 
 def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--gdino_root", default="/home/seanachan/GMC-Link/det_cache/grounding_dino_v1")
+    p.add_argument("--iou_thr", type=float, default=0.5)
+    p.add_argument("--out_tag", default="")
+    args = p.parse_args()
+
+    iou_thr = args.iou_thr
+    print(f"\nGDINO_ROOT: {args.gdino_root}")
+    print(f"IoU threshold: {iou_thr}")
     print(f"\n{'seq':<6} {'class':<11} "
           f"{'NS_boxes':>9} {'GDINO_boxes':>12} "
           f"{'matched_NS':>11} {'recall':>8} "
@@ -95,7 +103,7 @@ def main():
     for seq in SEQS:
         for cls in CLASSES:
             ns = load_ns(seq, cls)
-            gd = load_gdino(seq, cls)
+            gd = load_gdino(seq, cls, args.gdino_root)
             all_fids = set(ns.keys()) | set(gd.keys())
 
             tot_ns = 0
@@ -107,7 +115,7 @@ def main():
                 gd_b = gd.get(fid, [])
                 tot_ns += len(ns_b)
                 tot_gd += len(gd_b)
-                mn, mg = match_frame(ns_b, gd_b, IOU_THR)
+                mn, mg = match_frame(ns_b, gd_b, iou_thr)
                 matched_ns += mn
                 matched_gd += mg
 
@@ -139,10 +147,12 @@ def main():
 
     out_dir = "/home/seanachan/GMC-Link/diagnostics/results/grounding_dino"
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "recall_vs_ns.json"), "w") as f:
-        json.dump(dict(iou_thr=IOU_THR, per_cell=summary,
-                       overall_pass=all_pass), f, indent=2)
-    print(f"Wrote {out_dir}/recall_vs_ns.json")
+    suffix = f"_{args.out_tag}" if args.out_tag else ""
+    out_path = os.path.join(out_dir, f"recall_vs_ns{suffix}.json")
+    with open(out_path, "w") as f:
+        json.dump(dict(iou_thr=iou_thr, gdino_root=args.gdino_root,
+                       per_cell=summary, overall_pass=all_pass), f, indent=2)
+    print(f"Wrote {out_path}")
 
 
 if __name__ == "__main__":
