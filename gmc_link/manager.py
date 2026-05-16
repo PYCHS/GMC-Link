@@ -83,8 +83,8 @@ class GMCLinkManager:
                 if ckpt_world_xy is not None:
                     world_xy = bool(ckpt_world_xy)
                 self.use_clip_feat = bool(checkpoint.get("use_clip_feat", False))
-                self.clip_feat_dim = int(checkpoint.get("clip_feat_dim", 512))
-                self.clip_proj_dim = int(checkpoint.get("clip_proj_dim", 64))
+                self.clip_feat_dim = int(checkpoint.get("clip_feat_dim") or 512)
+                self.clip_proj_dim = int(checkpoint.get("clip_proj_dim") or 64)
 
         # 17D depth path
         self.use_depth = bool(use_depth)
@@ -543,6 +543,14 @@ class GMCLinkManager:
                 motion_tensor, language_embedding.to(self.device),
                 clip_feats=clip_tensor,
             )
+            # Case 2 fusion-transformer spike: stash per-track pre-cosine
+            # embeddings so callers can dump them without re-running aligner.
+            # Keyed by track_id; overwritten each frame.
+            self._last_motion_emb = {
+                int(tid): motion_emb[i].detach().cpu().numpy()
+                for i, tid in enumerate(track_ids)
+            }
+            self._last_lang_emb = lang_emb.detach().cpu().numpy()
             # Cosine similarity with margin calibration → sigmoid to [0, 1]
             # Margin shifts the sigmoid reference point so that zero-similarity
             # maps below 0.5, improving discrimination for stationary objects

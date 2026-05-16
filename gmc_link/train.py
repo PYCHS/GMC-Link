@@ -22,7 +22,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from gmc_link.losses import AlignmentLoss, HardNegativeInfoNCE
+from gmc_link.losses import AlignmentLoss, HardNegativeInfoNCE, StructuralConsensusLoss
 from gmc_link.alignment import MotionLanguageAligner
 from gmc_link.dataset import (
     MotionLanguageDataset, SequenceMotionLanguageDataset,
@@ -40,6 +40,8 @@ def train_one_epoch(
     device: torch.device,
     grad_clip: float = 0.0,
     target_class_id: Optional[int] = None,
+    struct_loss: Optional[nn.Module] = None,
+    lam_struct: float = 0.0,
 ) -> Tuple[float, float]:
     """
     Train the model for a single epoch using CLIP-style cross-modal InfoNCE.
@@ -93,10 +95,11 @@ def train_one_epoch(
             padding_masks = padding_masks.to(device)
         if clip_features is not None:
             clip_features = clip_features.to(device)
-        sim_matrix = model(
+        motion_emb, lang_emb = model.encode(
             motion_features, language_features,
             padding_mask=padding_masks, clip_feats=clip_features,
         )
+        sim_matrix = torch.matmul(motion_emb, lang_emb.t())
 
         # ── InfoNCE loss with false-negative masking ──
         anchor_mask = None
@@ -108,6 +111,8 @@ def train_one_epoch(
                 # avoid div-by-zero / NaN gradient. Loss for logging = 0.
                 continue
         loss = loss_func(sim_matrix, expr_ids, anchor_mask=anchor_mask)
+        if struct_loss is not None and lam_struct > 0.0:
+            loss = loss + lam_struct * struct_loss(motion_emb, lang_emb)
 
         optimizer.zero_grad()
         loss.backward()
@@ -342,6 +347,8 @@ def train_loop(
     warmup_epochs: int = 0,
     grad_clip: float = 0.0,
     target_class_id: Optional[int] = None,
+    struct_loss: Optional[nn.Module] = None,
+    lam_struct: float = 0.0,
 ) -> None:
     """
     Execute the main training loop across all epochs and save the final weights.
@@ -367,6 +374,7 @@ def train_loop(
         avg_loss, accuracy = train_one_epoch(
             model, dataloader, optimizer, criterion, device,
             grad_clip=grad_clip, target_class_id=target_class_id,
+            struct_loss=struct_loss, lam_struct=lam_struct,
         )
         # Only step cosine scheduler after warmup completes
         if epoch >= warmup_epochs:
@@ -442,6 +450,9 @@ def _run_single_stage(
     depth_cache_dir: str = None,
     identity_init_depth: bool = False,
     world_xy: bool = False,
+    lam_struct: float = 0.0,
+    lam_angle: float = 0.5,
+    struct_mode: str = "dist",
 ) -> None:
     """Run a single training stage."""
     if loss_name == "hninfo" and use_group_labels:
@@ -505,9 +516,20 @@ def _run_single_stage(
         cls_summary = {c: cls_counts[i] for i, c in enumerate(CLASS_LABELS)}
         print(f"  id_to_class distribution: {cls_summary}")
 
+    struct_loss = None
+    if lam_struct > 0.0:
+        struct_loss = StructuralConsensusLoss(
+            lam_angle=lam_angle, mode=struct_mode,
+        ).to(device)
+        print(
+            f"  Structural Consensus aux loss: lam_struct={lam_struct} "
+            f"mode={struct_mode} lam_angle={lam_angle if struct_mode == 'dist_angle' else 'N/A'}"
+        )
+
     train_loop(model, dataloader, optimizer, scheduler, criterion, device, epochs,
                save_path=save_path, warmup_epochs=warmup_epochs, grad_clip=grad_clip,
-               target_class_id=target_class_id)
+               target_class_id=target_class_id,
+               struct_loss=struct_loss, lam_struct=lam_struct)
 
     checkpoint = torch.load(save_path, map_location=device, weights_only=False)
     checkpoint["motion_dim"] = motion_dim
@@ -619,6 +641,17 @@ def main() -> None:
                              "Z lookup matches use_depth (default 30m fallback).")
     parser.add_argument("--seed", type=int, default=None,
                         help="RNG seed for torch/numpy/random (default: nondeterministic)")
+    parser.add_argument("--lam-struct", type=float, default=0.0,
+                        help="Structural Consensus Constraint aux-loss weight "
+                             "(CDRMOT lever, Lever A). 0=disabled. Typical sweep "
+                             "{0.1, 0.5, 1.0}. Pairwise-distance MSE between motion "
+                             "and language embedding manifolds.")
+    parser.add_argument("--lam-angle", type=float, default=0.5,
+                        help="Weight on triplet-angle term inside StructuralConsensusLoss "
+                             "(only used when --struct-mode dist_angle).")
+    parser.add_argument("--struct-mode", default="dist", choices=["dist", "dist_angle"],
+                        help="Structural-loss variant: 'dist' (pairwise-distance only, "
+                             "Phase A1 default) or 'dist_angle' (+ triplet-angle term).")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -724,6 +757,9 @@ def main() -> None:
             depth_cache_dir=args.depth_cache_dir,
             identity_init_depth=args.identity_init_depth,
             world_xy=args.world_xy,
+            lam_struct=args.lam_struct,
+            lam_angle=args.lam_angle,
+            struct_mode=args.struct_mode,
         )
 
         stage2_lr = args.lr * 0.1
@@ -750,6 +786,9 @@ def main() -> None:
             depth_cache_dir=args.depth_cache_dir,
             identity_init_depth=args.identity_init_depth,
             world_xy=args.world_xy,
+            lam_struct=args.lam_struct,
+            lam_angle=args.lam_angle,
+            struct_mode=args.struct_mode,
         )
         return
 
@@ -790,6 +829,9 @@ def main() -> None:
         depth_cache_dir=args.depth_cache_dir,
         identity_init_depth=args.identity_init_depth,
         world_xy=args.world_xy,
+        lam_struct=args.lam_struct,
+        lam_angle=args.lam_angle,
+        struct_mode=args.struct_mode,
     )
 
 
