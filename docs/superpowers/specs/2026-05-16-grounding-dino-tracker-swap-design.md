@@ -201,3 +201,31 @@ Commit to writeup at whatever A3 or A4 delivers if:
 - Multi-seed mean ≥ +2.23 (5% target achieved) → ship + paper update.
 
 Whichever comes first.
+
+## Outcome (2026-05-16, same day)
+
+**Phase A1 EXECUTED. G1 gate FAILED.**
+
+Detection cache built successfully (`det_cache/grounding_dino_v1/`, 6 cells, 264–3249 boxes each). G1 recall vs NS predict.txt at IoU≥0.5:
+
+| seq  | class      | NS  | GDINO | recall | new_ratio | verdict |
+|------|------------|-----|-------|--------|-----------|---------|
+| 0005 | car        |1156 |  864  | 0.567  |  0.241    | FAIL    |
+| 0005 | pedestrian |   0 |  413  |  nan   |  1.000    | PASS¹   |
+| 0011 | car        |2818 | 1932  | 0.501  |  0.269    | FAIL    |
+| 0011 | pedestrian |  55 |  625  | 0.691  |  0.939    | FAIL    |
+| 0013 | car        |  40 |  413  | 0.750  |  0.927    | FAIL    |
+| 0013 | pedestrian | 881 | 3249  | 0.625  |  0.830    | FAIL    |
+
+¹ NS predict.txt empty for cell — recovery scenario only, doesn't lift overall gate.
+
+5 of 6 cells FAIL on recall floor. Open-vocab Grounding-DINO box geometry diverges
+systematically from KITTI-trained YOLOv8-NS. Path A KILLED per spec terminal trigger.
+Phases A2/A3/A4 not executed.
+
+**Documented as 20th NEG lever** in ceiling-break campaign (memory
+`project_path_a_grounding_dino_g1_negative.md`). Public-only paths toward +2.23 HOTA
+(5% target) now exhausted except for Path C (LVLM rerank atop existing YOLOv8-NS +
+iKUN ship). Decision on Path C pending user.
+
+Ship claim unchanged: **44.608 ± 0.024 HOTA, +0.044 vs paper 44.564, p=0.044**.
