@@ -1,0 +1,22 @@
+arch	aligner	seed	recipe	pooled	APPEAR	MOVING	STATIC
+ikun	-	-	{model} Baseline	44.224	46.346	25.531	43.914
+fh_v1	-	-	{model} Baseline	53.110	55.492	43.981	48.983
+fh_v2	-	-	{model} Baseline	42.526	41.713	48.018	44.868
+ikun	mlp	0	{model} + GMC Baseline	44.190	46.346	29.778	44.881
+ikun	mlp	1	{model} + GMC Baseline	44.120	46.346	29.270	44.927
+ikun	mlp	2	{model} + GMC Baseline	44.225	46.346	29.676	45.147
+ikun	sharedweight	0	{model} + GMC Baseline	44.254	46.346	29.265	44.725
+ikun	sharedweight	1	{model} + GMC Baseline	44.289	46.346	29.321	44.804
+ikun	sharedweight	2	{model} + GMC Baseline	44.272	46.346	30.252	44.279
+fh_v1	mlp	0	{model} + GMC Baseline	53.102	55.492	43.971	49.005
+fh_v1	mlp	1	{model} + GMC Baseline	53.108	55.492	44.008	49.020
+fh_v1	mlp	2	{model} + GMC Baseline	53.112	55.492	44.042	49.010
+fh_v1	sharedweight	0	{model} + GMC Baseline	53.124	55.492	44.049	49.058
+fh_v1	sharedweight	1	{model} + GMC Baseline	53.115	55.492	44.016	49.028
+fh_v1	sharedweight	2	{model} + GMC Baseline	53.123	55.492	44.113	48.997
+fh_v2	mlp	0	{model} + GMC Baseline	42.532	41.713	48.047	44.905
+fh_v2	mlp	1	{model} + GMC Baseline	42.533	41.713	48.056	44.901
+fh_v2	mlp	2	{model} + GMC Baseline	42.534	41.713	48.048	44.922
+fh_v2	sharedweight	0	{model} + GMC Baseline	42.533	41.713	48.049	44.920
+fh_v2	sharedweight	1	{model} + GMC Baseline	42.529	41.713	48.002	44.926
+fh_v2	sharedweight	2	{model} + GMC Baseline	42.533	41.713	48.052	44.913

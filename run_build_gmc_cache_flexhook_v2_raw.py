@@ -116,9 +116,7 @@ def score_one_expression(linker, motion_emb, keys, text_emb, temperature):
     If GMC_RAW_COS=1 env set, dumps raw cosine [-1,+1] (skip sigmoid + skip EMA)
     for Arm B fusion experiments."""
     with torch.no_grad():
-        lang_emb = torch.nn.functional.normalize(
-            linker.aligner.lang_projector(text_emb), p=2, dim=-1
-        )  # (1, 256)
+        lang_emb = linker.aligner.encode_lang(text_emb)  # (1, 256)
         cos_sim = (motion_emb @ lang_emb.t()).squeeze(-1)  # (N,)
         if GMC_RAW_COS:
             raw_scores = cos_sim.cpu().numpy()

@@ -66,6 +66,10 @@ class GMCLinkManager:
         self.use_clip_feat = False
         self.clip_feat_dim = 512
         self.clip_proj_dim = 64
+        self.fusion_site = "input_concat"
+        self.lang_passthrough = False
+        self.app_proj_dim = 256
+        self.architecture = "mlp"
         checkpoint = None
         if weights_path:
             checkpoint = torch.load(weights_path, map_location=device)
@@ -85,6 +89,10 @@ class GMCLinkManager:
                 self.use_clip_feat = bool(checkpoint.get("use_clip_feat", False))
                 self.clip_feat_dim = int(checkpoint.get("clip_feat_dim") or 512)
                 self.clip_proj_dim = int(checkpoint.get("clip_proj_dim") or 64)
+                self.fusion_site = str(checkpoint.get("fusion_site") or "input_concat")
+                self.lang_passthrough = bool(checkpoint.get("lang_passthrough", False))
+                self.app_proj_dim = int(checkpoint.get("app_proj_dim") or 256)
+                self.architecture = str(checkpoint.get("architecture") or "mlp")
 
         # 17D depth path
         self.use_depth = bool(use_depth)
@@ -105,9 +113,13 @@ class GMCLinkManager:
 
         self.aligner = MotionLanguageAligner(
             motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256,
+            architecture=self.architecture,
             use_clip_feat=self.use_clip_feat,
             clip_feat_dim=self.clip_feat_dim,
             clip_proj_dim=self.clip_proj_dim,
+            fusion_site=self.fusion_site,
+            lang_passthrough=self.lang_passthrough,
+            app_proj_dim=self.app_proj_dim,
         ).to(device)
         # Lazy CLIP B/32 (DataComp-XL) for runtime bbox-crop encoding. Tracker
         # bboxes are NOT in the GT-keyed train cache, must extract live.

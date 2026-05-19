@@ -101,9 +101,11 @@ class MotionLanguageAligner(nn.Module):
     """
     Reasoning Head of GMC-Link that aligns motion features with language features.
 
-    Supports two architectures:
+    Supports three architectures:
     - "mlp": single-frame MLP projector (original, default)
     - "temporal_transformer": sequence-based transformer encoder with [CLS] token
+    - "shared_weight": per-modality Linear adapter → shared 2-hidden MLP → LN → L2
+      (symmetric two-tower with shared nonlinear core; ~628k params, same as mlp)
 
     Trained with Supervised InfoNCE. At inference, use encode() to get L2-normalized
     embeddings and compute cosine similarity directly.
@@ -139,6 +141,26 @@ class MotionLanguageAligner(nn.Module):
             )
         if fusion_site == "late_concat" and not use_clip_feat:
             raise ValueError("fusion_site='late_concat' requires use_clip_feat=True")
+
+        if architecture == "shared_weight":
+            if use_clip_feat:
+                raise ValueError("shared_weight does not support use_clip_feat (keep simple)")
+            if lang_passthrough:
+                raise ValueError("shared_weight does not support lang_passthrough")
+            if identity_init_depth:
+                raise ValueError("shared_weight does not support identity_init_depth")
+            self.motion_adapter = nn.Linear(motion_dim, embed_dim)
+            self.lang_adapter = nn.Linear(lang_dim, embed_dim)
+            self.shared_weight = nn.Sequential(
+                nn.Linear(embed_dim, 512),
+                nn.ReLU(),
+                nn.Linear(512, 512),
+                nn.ReLU(),
+                nn.Linear(512, embed_dim),
+                nn.LayerNorm(embed_dim),
+            )
+            self.out_dim = embed_dim
+            return
 
         # ── Motion side ──────────────────────────────────────────────
         if use_clip_feat and fusion_site == "input_concat":
@@ -220,6 +242,14 @@ class MotionLanguageAligner(nn.Module):
                 nn.LayerNorm(self.out_dim),
             )
 
+    def encode_lang(self, lang_feats: torch.Tensor) -> torch.Tensor:
+        """Project language features → L2-normalized embedding.
+        Arch-dispatched so callers don't reach into `lang_projector` directly."""
+        if self.architecture == "shared_weight":
+            l = self.lang_adapter(lang_feats)
+            return F.normalize(self.shared_weight(l), p=2, dim=-1)
+        return F.normalize(self.lang_projector(lang_feats), p=2, dim=-1)
+
     def encode(
         self,
         motion_feats: torch.Tensor,
@@ -242,6 +272,13 @@ class MotionLanguageAligner(nn.Module):
             motion_emb:   (N, embed_dim) L2-normalized motion embeddings.
             lang_emb:     (N, embed_dim) or (M, embed_dim) L2-normalized language embeddings.
         """
+        if self.architecture == "shared_weight":
+            m = self.motion_adapter(motion_feats)
+            l = self.lang_adapter(lang_feats)
+            motion_emb = F.normalize(self.shared_weight(m), p=2, dim=-1)
+            lang_emb = F.normalize(self.shared_weight(l), p=2, dim=-1)
+            return motion_emb, lang_emb
+
         if self.use_clip_feat and self.fusion_site == "input_concat":
             if clip_feats is None:
                 raise ValueError("clip_feats required when use_clip_feat=True")
