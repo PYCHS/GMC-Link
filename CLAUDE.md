@@ -75,9 +75,9 @@ pip install -e .
 - Output **13D motion vector**: `[res_dx_s, res_dy_s, res_dx_m, res_dy_m, res_dx_l, res_dy_l, dw, dh, cx, cy, w, h, snr]`
 
 **Stage 3 — Motion-Language Alignment** (`gmc_link/alignment.py`):
-- `MotionLanguageAligner`: default = `shared_weight` arch (adopted 2026-05-19). Per-modality Linear adapter (motion 13→256, lang 384→256) → shared 2-hidden MLP (256→512→512→256) → LN → L2-norm. Symmetric two-tower, shared nonlinear core enforces common geometry by construction.
-- Legacy `mlp` arch (independent dual-MLP, kept for backward-compat with pre-2026-05-19 checkpoints): `--architecture mlp`. Per-class HOTA equivalent at simple-fusion regime, dropped only for simplicity/principle.
-- Inference: cosine similarity ∈ [-1, +1] = raw alignment score (no sigmoid/EMA per `feedback_simplicity_over_tiny_hota` Rule 1)
+- `MotionLanguageAligner`: default = `mlp` arch. Independent dual-MLP per modality (motion 13→256→512→256, lang 384→256→512→256) → L2-norm. Asymmetric per-modality projectors.
+- Opt-in `shared_weight` arch via `--architecture shared_weight`: per-modality Linear adapter (motion 13→256, lang 384→256) → shared 2-hidden MLP (256→512→512→256) → LN → L2-norm. Symmetric two-tower, shared nonlinear core. Tested 2026-05-19 two-baseline; HOTA equivalent at simple-fusion regime; not adopted as default.
+- Inference: sigmoid + EMA smoothing on raw cosine (legacy default; raw-cos opt-in via `GMC_RAW_COS=1`).
 - Train symmetric InfoNCE loss + False-Negative Masking (`gmc_link/losses.py`)
 - Language embeddings: SentenceTransformer (all-MiniLM-L6-v2, 384D) via `gmc_link/text_utils.py`
 
@@ -118,7 +118,7 @@ FusionHead([ikun_logit, gmc_score, is_motion_flag]) → P(match)
 - `FRAME_GAPS = [2, 5, 10]` (`manager.py`) — must match between `GMCLinkManager` + `dataset.py`
 - InfoNCE temperature: `0.07` (`losses.py`)
 - EMA alphas: `MotionBuffer(α=0.3)`, `ScoreBuffer(α=0.4)`
-- Embedding dims: motion 13D → 256D (Linear adapter), language 384D → 256D (Linear adapter) → shared trunk 256→512→512→256 (shared_weight arch)
+- Embedding dims (mlp default): motion 13D → 256D → 512D → 256D, language 384D → 256D → 512D → 256D. Shared_weight arch (opt-in): motion/lang 13D/384D → 256D (Linear adapter) → shared trunk 256→512→512→256.
 - Fusion Head arch: 3→32→16→1 sigmoid output
 
 ### Project Layout Notes

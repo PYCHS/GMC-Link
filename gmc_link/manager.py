@@ -11,6 +11,8 @@ import numpy as np
 
 from .utils import (
     normalize_velocity,
+    MotionBuffer,
+    ScoreBuffer,
     warp_points,
     VELOCITY_SCALE,
 )
@@ -53,6 +55,9 @@ class GMCLinkManager:
         self.device = device
         self.frame_gap = frame_gap
 
+        self.motion_buffer = MotionBuffer(alpha=0.3)
+        self.score_buffer = ScoreBuffer(alpha=0.4)
+        self.cosine_buffer = ScoreBuffer(alpha=0.4)
 
         self.extra_features: list = []
         motion_dim = 13
@@ -369,10 +374,14 @@ class GMCLinkManager:
                     residual_velocities[2][0], residual_velocities[2][1],
                     dw_raw, dh_raw,
                 ], dtype=np.float32)
-                dx_s, dy_s = full_raw_v[0], full_raw_v[1]
-                dx_m, dy_m = full_raw_v[2], full_raw_v[3]
-                dx_l, dy_l = full_raw_v[4], full_raw_v[5]
-                dw, dh = full_raw_v[6], full_raw_v[7]
+                if update_state:
+                    smoothed_v = self.motion_buffer.smooth(tid, full_raw_v)
+                else:
+                    smoothed_v = self.motion_buffer.peek(tid, full_raw_v)
+                dx_s, dy_s = smoothed_v[0], smoothed_v[1]
+                dx_m, dy_m = smoothed_v[2], smoothed_v[3]
+                dx_l, dy_l = smoothed_v[4], smoothed_v[5]
+                dw, dh = smoothed_v[6], smoothed_v[7]
             else:
                 # First appearance: zero velocity
                 smoothed_v = np.zeros(8, dtype=np.float32)
@@ -569,13 +578,22 @@ class GMCLinkManager:
         for i, tid in enumerate(track_ids):
             raw_score = float(raw_scores[i])
             raw_cosine = float(cosine_sim_np[i])
-            scores_dict[tid] = raw_cosine if raw_cos else raw_score
+            if update_state:
+                smoothed_score = self.score_buffer.smooth(tid, raw_score)
+                smoothed_cosine = self.cosine_buffer.smooth(tid, raw_cosine)
+            else:
+                smoothed_score = self.score_buffer.peek(tid, raw_score)
+                smoothed_cosine = self.cosine_buffer.peek(tid, raw_cosine)
+            scores_dict[tid] = raw_cosine if raw_cos else smoothed_score
             velocities_dict[tid] = compensated_velocities[i]
-            cosine_dict[tid] = raw_cosine
+            cosine_dict[tid] = smoothed_cosine
 
         if update_state:
             # Clean up dead tracks
             active_ids = set(track_ids)
+            self.motion_buffer.clear_dead_tracks(track_ids)
+            self.score_buffer.clear_dead_tracks(track_ids)
+            self.cosine_buffer.clear_dead_tracks(track_ids)
             dead_centroids = set(self.centroid_history.keys()) - active_ids
             for d in dead_centroids:
                 del self.centroid_history[d]

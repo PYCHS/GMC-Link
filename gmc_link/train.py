@@ -588,12 +588,11 @@ def main() -> None:
     parser.add_argument("--resume", default=None, help="Path to pretrained weights (for stage 2)")
     parser.add_argument("--extra-features", default=None,
                         help="Comma-separated extra features (e.g., speed_m,ego_motion)")
-    parser.add_argument("--architecture", default="shared_weight",
+    parser.add_argument("--architecture", default="mlp",
                         choices=["mlp", "temporal_transformer", "shared_weight"],
-                        help="Motion encoder architecture (default: shared_weight). "
+                        help="Motion encoder architecture (default: mlp). "
                              "shared_weight: per-modality Linear adapter → shared 2-hidden MLP, "
-                             "raw cos at inference, no input LN, no post-ops. "
-                             "mlp: legacy independent dual-MLP (kept for backward-compat).")
+                             "raw cos at inference, no input LN, no post-ops.")
     parser.add_argument("--seq-len", type=int, default=10,
                         help="Sequence length T for temporal_transformer (default: 10)")
     parser.add_argument("--text-encoder", default="all-MiniLM-L6-v2",
