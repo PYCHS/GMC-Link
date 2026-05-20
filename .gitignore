@@ -247,3 +247,8 @@ diagnostics/results/label_audit/*.mp4
 
 # Depth caches (build artifacts, ~330MB full)
 gmc_link/z_track_*_cache.json
+gmc_link/depth_cache/
+
+# GMC score caches (derived from weights, reproducible)
+gmc_link/gmc_scores_*.json
+results/*.tsv
