@@ -36,10 +36,10 @@ Natural Language Prompt ──► SentenceTransformer Embedding ─────�
 | ------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **GlobalMotion**          | `core.py`                             | Detects camera movement via ORB feature matching and RANSAC homography estimation. Returns the homography matrix and background warp residual.                                                 |
 | **Utilities**             | `utils.py`                            | `warp_points()` transforms previous positions into the current frame's coordinate system. `normalize_velocity()` makes velocities scale-invariant. `MotionBuffer` applies EMA smoothing to reduce jitter. |
-| **MotionLanguageAligner** | `alignment.py`                        | A dual MLP that projects a 13D spatio-temporal vector and a 384-dim language embedding into a shared 256D space, then computes cosine similarity.                                            |
+| **MotionLanguageAligner** | `alignment.py`                        | `shared_weight` arch (ship default): per-modality Linear adapter (motion 13→256, lang 384→256) → shared 2-hidden MLP (256→512→512→256) → LN → L2-norm. Cosine similarity in shared 256D space. Legacy `mlp` arch (asymmetric dual-MLP) also supported via `--architecture mlp`. |
 | **TextEncoder**           | `text_utils.py`                       | Wraps `all-MiniLM-L6-v2` (SentenceTransformers) to encode natural language prompts into 384-dim embeddings.                                                                                               |
 | **GMCLinkManager**        | `manager.py`                          | The orchestrator. Maintains cumulative homographies, computes multi-scale ego-compensated residual velocities, and queries the aligner for alignment scores.                                                                 |
-| **Fusion Head**           | `fusion_head.py`                      | Learned MLP that fuses iKUN CLIP logits with GMC-Link motion scores for the best overall accuracy (+8.4% F1 over iKUN alone).                                                                             |
+| **Decision-Level Fusion** | `run_ikun_linear_additive.py`, `run_flexhook_phase5_gmc_sweep.py`, `run_flexhook_v2_raw_sweep.py` | Per-arch linear additive fusion: `final = model_logit + α · (sc · raw_cos + thr)`. Ship over `fusion_head.py` (F1-optimized MLP head, crashes HOTA per project memory). |
 | **Dataset & Training**    | `dataset.py`, `train.py`, `losses.py` | Builds (motion, language) training pairs from [Refer-KITTI V2](https://github.com/wudongming97/RMOT) using symmetric InfoNCE loss.                                              |
 | **Demo Inference**        | `demo_inference.py`                   | End-to-end evaluation on iKUN + GMC-Link fusion across all expressions in a sequence.                                                                                                                      |
 
@@ -60,6 +60,44 @@ Natural Language Prompt ──► SentenceTransformer Embedding ─────�
 6. **Alignment Scoring**: The dual MLP aligner projects the 13D motion vector and the 384-dim language vector into a shared 256-dim embedding space. Cosine similarity + sigmoid produces a score in `[0, 1]` indicating how well the object's kinematics matches the description.
 
 ---
+
+## Framework
+
+### Loss Calculation
+
+  $$
+  \mathcal{L} = \frac{1}{2B} \sum_{i=1}^{B} \left[ -\log
+  \frac{\exp(s_{ii}/\tau)}{\sum_{j=1}^{B} \exp(s_{ij}/\tau)} \;-\; \log
+  \frac{\exp(s_{ii}/\tau)}{\sum_{j=1}^{B} \exp(s_{ji}/\tau)} \right]
+  $$
+
+   where:
+
+- $s_{ij} = \hat{m}_i \cdot \hat{l}_j$ = cosine sim (motion embed i · language embed
+  j)
+- $\hat{m}, \hat{l}$ = L2-normed 256D embeds
+- $\tau = 0.07$
+- $B$ = batch size (128)
+- diagonal $s_{ii}$ = positive pair
+
+  First term = motion $\rightarrow$ language. Second term = language $\rightarrow$ motion.
+
+  With FNM (mask same-sentence off-diagonals from denom):
+
+  $$
+  \mathcal{L}{m2l} = -\frac{1}{B}\sum_i \log \frac{\exp(s{ii}/\tau)}{\exp(s_{ii}/\tau)
+  + \sum_{j \in \mathcal{N}i} \exp(s{ij}/\tau)}
+  $$
+
+  where $\mathcal{N}_i = {j : j \neq i, \text{sent}(j) \neq \text{sent}(i)}$
+
+### Metrics - AUC Score
+
+$$\text{AUC} = P(\text{score}{\text{GT}} > \text{score}{\text{non-GT}}) =
+  \frac{U}{n_{gt} \times n_{non-gt}}$$
+
+  直觀: 隨機抓一個 GT track 跟一個 non-GT track，GT score 比較高的機率。0.779 = 78%
+  的時候 GT 比 non-GT 高分。
 
 ## Training
 
@@ -147,48 +185,48 @@ Progressive feature addition evaluated on seq 0011, expr "moving-cars" (score se
 
 ---
 
-## iKUN Integration & Learned Fusion (Best Results)
+## Current Ship (2026-05-21) — 3-Architecture Cross-Arch Validation
 
-When paired with [iKUN](https://github.com/dyhBUPT/iKUN) (a CLIP-based RMOT tracker), the **InfoNCE-trained aligner + learned fusion head** achieves the best overall accuracy:
+GMC-Link plugs into 3 downstream RMOT consumers via decision-level linear additive fusion. Evaluated on Refer-KITTI V1 (3-sequence pooled HOTA: 0005, 0011, 0013) and V2 (4-sequence pooled: 0005, 0011, 0013, 0019), n=3 multi-seed.
 
-| Method | Motion F1 | Appearance F1 | Stationary F1 | Overall F1 | Δ Overall |
-| --- | --- | --- | --- | --- | --- |
-| iKUN baseline | 0.6386 | 0.4338 | 0.6684 | 0.5730 | — |
-| iKUN + OR-logic | 0.6650 | 0.4338 | 0.6684 | 0.5863 | +1.3% |
-| iKUN + BCE Fusion | 0.6252 | 0.4792 | 0.6972 | 0.5895 | +1.7% |
-| **iKUN + InfoNCE Fusion** | **0.7328** | **0.5578** | **0.7134** | **0.6569** | **+8.4%** |
+### Ship Pipeline
 
-### HOTA Evaluation (Refer-KITTI V1, seq 0011)
+```
+final_score = model_logit + α · (sc · raw_cos + thr)
+```
 
-| Metric | iKUN Baseline | iKUN + GMC-Link Fusion | Delta |
-|--------|--------------|------------------------|-------|
-| **HOTA** | 41.29 | **44.29** | **+3.00** |
-| **DetA** | 29.60 | **33.59** | **+3.99** |
-| **AssA** | 57.71 | **58.57** | +0.86 |
-| **MOTA** | 21.59 | **29.38** | **+7.79** |
-| **IDF1** | 52.18 | **57.07** | **+4.89** |
+- **Aligner:** `shared_weight` (Linear adapter motion 13→256 + lang 384→256 → shared MLP 256→512→512→256 → LN → L2)
+- **Aligner training:** V1 stage1, InfoNCE+FNM (τ=0.07), 100 ep, batch 256, lr 1e-3, seeds {0,1,2}
+- **GMC score:** raw cosine ∈ [−1,+1] (no sigmoid, no EMA — `GMC_RAW_COS=1`)
+- **Fusion:** per-arch (α, sc, thr) on motion + appearance axes
 
-The fusion head is a tiny MLP (`[ikun_logit, gmc_score, is_motion_flag] → 32 → 16 → 1`). The key breakthrough is training the GMC-Link aligner with InfoNCE instead of BCE — the structured contrastive embedding space produces far more discriminative motion scores, enabling +8.4% Overall F1 improvement over iKUN alone.
+### Multi-Seed HOTA (n=3 mean ± sample std)
 
-> **Note:** Feature-level injection of motion embeddings into iKUN's CLIP visual pipeline was also explored (Stage 3) but causes catastrophic regression (−21.7% F1) because additive injection corrupts the CLIP representation. Decision-level fusion is the correct approach.
+| arch | Raw Baseline (no GMC) | + GMC Ship | Δ vs Raw | Paper anchor | Δ vs Paper |
+|---|---|---|---|---|---|
+| **iKUN** (cascade+simcalib, YOLOv8-NS) | 44.224 | **44.634 ± 0.066** | +0.410 | 44.564 | **+0.070** |
+| **FlexHook V1** (Temp-NeuralSORT-kitti1) | 53.110 | **53.526 ± 0.087** | +0.416 | 53.824 | −0.298 |
+| **FlexHook V2** (Temp-NeuralSORT-kitti1, V2 labels) | 42.526 | **42.807 ± 0.038** | +0.281 | 42.526 | **+0.281** |
 
-### HOTA Evaluation (Refer-KITTI V2, Motion Expressions, Oracle Tracking)
+**Paper-beat count: 2/3** (iKUN +0.070, V2 +0.281). FH V1 paper-gap structural in all configurations tested.
 
-Standalone GMC-Link evaluation on the V2 test set (sequences 0016–0020), using GT tracks as oracle detections to isolate motion reasoning from tracker errors. Only motion-related expressions (793 out of 2180) are evaluated.
+### Per-Arch Recipes (locked)
 
-| Metric | Baseline (all positive) | GMC-Link (τ=0.5) | Delta |
-|--------|------------------------|-------------------|-------|
-| **HOTA** | 45.04 | 38.04 | -7.00 |
-| **MOTA** | -244.46 | **-40.87** | **+203.6** |
-| **Recall** | 100.00 | 39.90 | -60.10 |
-| **Precision** | 22.50 | **33.07** | **+10.6** |
-| **IDF1** | 36.73 | 36.16 | -0.57 |
+| arch | α_m | sc_m | thr_m | α_a | sc_a | thr_a |
+|---|---|---|---|---|---|---|
+| iKUN | 1.0 | 0.9 | +0.17 | 1.0 | 0.30 | +0.10 |
+| FH V1 | 0.65 | 10 | +3 | 1.0 | 3.5 | +0.9 |
+| FH V2 | 0.4 | 10 | +1.3 | 1.0 | 3.5 | +1.2 |
 
-The baseline naively predicts all tracked objects as positive (100% recall, terrible precision). GMC-Link acts as a motion discriminator, improving MOTA by +203 points and precision by +10.6pp by filtering non-matching objects. The lower recall (39.9%) is expected — GMC-Link is designed to be fused with a vision model (iKUN) that provides appearance-based recall, while GMC-Link adds motion discrimination.
+The 18 hyperparams encode two effects: (1) per-arch score-scale calibration (model logits live in different ranges per backbone — iKUN [0,1], FH [−10, +10+]) + (2) per-class GMC-relevance damping (sc_a is 7-11× smaller than sc_m because GMC = motion signal is noise on appearance expressions like "black cars"). Auto-deriving sc via std-matching was tested and falsified (variant B, all 3 archs catastrophic NEG).
+
+> **Note:** Feature-level injection of motion embeddings into iKUN's CLIP visual pipeline was also explored but causes catastrophic regression (−21.7% F1) because additive injection corrupts the CLIP representation. Decision-level fusion is the correct approach.
 
 ---
 
-## TransRMOT Integration & Performance
+## TransRMOT Integration & Performance (Historical, pre-2026-05)
+
+> **Note:** This section documents the earlier `min(vision_prob, kinematic_prob)` fusion era on TransRMOT. The current ship (above) uses per-arch linear additive fusion on iKUN/FlexHook V1/V2 instead. TransRMOT integration is retained as historical context.
 
 ### How It's Plugged In (For Developers)
 
