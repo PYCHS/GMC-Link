@@ -16,14 +16,18 @@ It bridges the gap between **object motion** (geometry) and **language** (semant
    - (dw, dh) captures scale changes (e.g., approaching / receding objects)
    - (cx, cy, w, h) provides spatial context for handling parallax
    - snr measures motion reliability and suppresses noisy tracks
-3. **Aligning motion with language** using a learned neural network to produce a match score.
+3. **Aligning motion with language** using a learned `shared_weight` aligner (two-tower, shared nonlinear core) to produce a raw-cosine match score.
+
+The score is then combined with a downstream tracker's own logits via **decision-level linear additive fusion** (`final = model_logit + α·(sc·raw_cos + thr)`). Current ship validates across 3 architectures (n=3 multi-seed): iKUN 44.634 ± 0.066 (+0.070 vs paper 44.564), FlexHook V1 53.526 ± 0.087, FlexHook V2 42.807 ± 0.038 (+0.281 vs paper) — **2/3 beat their paper anchors**. See [Current Ship](#current-ship-2026-05-21--3-architecture-cross-arch-validation) below for the locked recipes.
+
+> **Note (historical):** An earlier learned-fusion-head era reported a +8.4% F1 gain (0.5730 → 0.6569) fused with iKUN. That F1-optimized MLP head was later falsified — it crashes pooled HOTA (−3.79) — and is superseded by the linear additive fusion above. The fusion head is retained only as legacy code.
 
 ---
 
 ## Architecture & Pipeline
 
 ```text
-Video Frame ──► GMC (Homography) ──► Motion Feature Extraction (13D) ──► MLP Aligner (InfoNCE) ──► Fusion with Tracker Score ──► Final Association
+Video Frame ──► GMC (Homography) ──► Motion Feature Extraction (13D) ──► shared_weight Aligner (InfoNCE) ──► Linear Additive Fusion with Tracker Score ──► Final Association
                                                                       ▲
 Natural Language Prompt ──► SentenceTransformer Embedding ────────────┘
 ```
@@ -57,7 +61,7 @@ Natural Language Prompt ──► SentenceTransformer Embedding ─────�
 
 5. **Language Encoding**: The user's text prompt (e.g., _"moving cars"_) is encoded once into a 384-dim vector using a SentenceTransformer.
 
-6. **Alignment Scoring**: The dual MLP aligner projects the 13D motion vector and the 384-dim language vector into a shared 256-dim embedding space. Cosine similarity + sigmoid produces a score in `[0, 1]` indicating how well the object's kinematics matches the description.
+6. **Alignment Scoring**: The `shared_weight` aligner (per-modality Linear adapter → shared 256→512→512→256 trunk → LN → L2-norm) projects the 13D motion vector and the 384-dim language vector into a shared 256-dim space. The **raw cosine similarity** (no sigmoid, no EMA — `GMC_RAW_COS=1`) is the GMC score fed into decision-level fusion. (A legacy sigmoid + EMA path producing a `[0, 1]` score is still available but is not the current ship.)
 
 ---
 
@@ -77,7 +81,7 @@ Natural Language Prompt ──► SentenceTransformer Embedding ─────�
   j)
 - $\hat{m}, \hat{l}$ = L2-normed 256D embeds
 - $\tau = 0.07$
-- $B$ = batch size (128)
+- $B$ = batch size (256, Stage 1 default)
 - diagonal $s_{ii}$ = positive pair
 
   First term = motion $\rightarrow$ language. Second term = language $\rightarrow$ motion.
@@ -91,13 +95,9 @@ Natural Language Prompt ──► SentenceTransformer Embedding ─────�
 
   where $\mathcal{N}_i = {j : j \neq i, \text{sent}(j) \neq \text{sent}(i)}$
 
-### Metrics - AUC Score
+### Evaluation Metric
 
-$$\text{AUC} = P(\text{score}{\text{GT}} > \text{score}{\text{non-GT}}) =
-  \frac{U}{n_{gt} \times n_{non-gt}}$$
-
-  直觀: 隨機抓一個 GT track 跟一個 non-GT track，GT score 比較高的機率。0.779 = 78%
-  的時候 GT 比 non-GT 高分。
+The project evaluates exclusively on **HOTA** (pooled, per downstream tracker). AUC is not used as a metric or gate — score separation at the aligner stage was decoupled from downstream HOTA, so HOTA is reported directly. See [Current Ship](#current-ship-2026-05-21--3-architecture-cross-arch-validation) for multi-seed HOTA results.
 
 ## Training
 
@@ -109,28 +109,38 @@ $$\text{AUC} = P(\text{score}{\text{GT}} > \text{score}{\text{non-GT}}) =
 
 ## Usage
 
-### Inference with Learned Fusion (Recommended)
+### Inference with Decision-Level Linear Additive Fusion (Current Ship)
 
-The learned fusion head combines iKUN's CLIP logits with GMC-Link's kinematic scores for the best results:
+The current ship fuses GMC-Link's **raw cosine** score with a downstream tracker's logit via a per-arch linear additive rule: `final = model_logit + α·(sc·raw_cos + thr)`. There is no learned fusion model at inference — only the locked (α, sc, thr) recipe per arch (see [Current Ship](#current-ship-2026-05-21--3-architecture-cross-arch-validation)). Reproduce via the per-arch sweep scripts:
+
+```bash
+# iKUN (cascade+simcalib, YOLOv8-NS)
+GMC_RAW_COS=1 python run_ikun_linear_additive.py
+
+# FlexHook V1 / V2
+GMC_RAW_COS=1 python run_flexhook_phase5_gmc_sweep.py
+GMC_RAW_COS=1 python run_flexhook_v2_raw_sweep.py
+```
+
+The raw GMC score for each track (consumed by the rule above) is produced by:
 
 ```python
-from gmc_link import GMCLinkManager, TextEncoder, load_fusion_head
+import os
+os.environ["GMC_RAW_COS"] = "1"  # raw cosine, no sigmoid/EMA — current ship
+from gmc_link import GMCLinkManager, TextEncoder
 
-# Initialize
 encoder = TextEncoder(device="cuda")
 linker = GMCLinkManager(weights_path="gmc_link_weights.pth", device="cuda", lang_dim=384)
-fusion_model, threshold = load_fusion_head("gmc_link/fusion_head_weights.pth")
 
 language_embedding = encoder.encode("moving cars")
-gmc_scores, _ = linker.process_frame(frame, active_tracks, language_embedding)
+raw_cos, _ = linker.process_frame(frame, active_tracks, language_embedding)
 
-# Fuse with iKUN logit for each track
-import torch
-is_motion = 1.0  # 1.0=motion, 0.5=stationary, 0.0=appearance
-feat = torch.tensor([[ikun_logit, gmc_scores[track_id], is_motion]])
-prob = fusion_model.predict_prob(feat).item()
-is_match = prob >= threshold
+# Per-arch linear additive fusion (iKUN motion-axis recipe shown)
+alpha, sc, thr = 1.0, 0.9, 0.17
+final_score = ikun_logit + alpha * (sc * raw_cos[track_id] + thr)
 ```
+
+> **Legacy:** An earlier learned fusion head (`gmc_link/fusion_head.py`, `load_fusion_head`) combined `[ikun_logit, gmc_score, is_motion_flag]` via a 3→32→16→1 MLP. It was falsified (F1-optimized MLP crashes pooled HOTA −3.79) and is **not** the recommended path. Code is retained for reproducibility only.
 
 ### Standalone GMC-Link (without iKUN)
 
@@ -140,7 +150,8 @@ linker = GMCLinkManager(weights_path="gmc_link_weights.pth", device="cuda", lang
 
 language_embedding = encoder.encode("moving cars")
 scores, velocities = linker.process_frame(frame, active_tracks, language_embedding)
-# scores = {track_id: 0.87, ...}
+# With GMC_RAW_COS=1 (ship default): scores = {track_id: 0.62, ...}  raw cosine ∈ [−1, +1]
+# Legacy (sigmoid+EMA, GMC_RAW_COS unset): scores ∈ [0, 1]
 ```
 
 ### Training the Aligner
@@ -149,7 +160,9 @@ scores, velocities = linker.process_frame(frame, active_tracks, language_embeddi
 python -m gmc_link.train
 ```
 
-### Training the Fusion Head
+### Training the Fusion Head (Legacy)
+
+> The learned fusion head is **legacy** — superseded by the linear additive fusion above (the MLP head crashes pooled HOTA −3.79). Retained for reproducibility only.
 
 ```bash
 python gmc_link/fusion_head.py --collect  # collect iKUN + GMC-Link training data
@@ -160,7 +173,7 @@ python gmc_link/fusion_head.py --eval     # evaluate on validation split
 ### Multi-Expression Evaluation
 
 ```bash
-python gmc_link/demo_inference.py --multi  # defaults to learned fusion
+python gmc_link/demo_inference.py --multi
 ```
 
 ---
@@ -276,11 +289,13 @@ By enforcing this `min(vision_prob, kinematic_prob)` requirement during evaluati
 | **Baseline TransRMOT (Vision Only)** | 38.06     | 29.28     | 50.83     | 40.19 | 47.36 |
 | **TransRMOT + GMC-Link (Ours)**      | **42.61** | **28.41** | **69.29** | 37.12 | 47.29 |
 
-_Integration resulted in a massive **+18.4% absolute surge** in Tracking Association and set a new **SOTA `42.61` HOTA score**, proving geometry-aware trackers drastically outperform pure vision._
+_In this historical `min(vision_prob, kinematic_prob)` era, integration produced a **+18.4% absolute surge** in Tracking Association and reached **`42.61` HOTA** on TransRMOT, demonstrating that geometry-aware fusion outperforms pure vision. Note: this `42.61` is a past min()-fusion result on TransRMOT and is **not** the current ship — the current ship uses per-arch linear additive fusion on iKUN/FlexHook V1/V2 (see [Current Ship](#current-ship-2026-05-21--3-architecture-cross-arch-validation))._
 
 ---
 
 ## TempRMOT Integration & Temporal Constraints
+
+> **Note:** The experiments below used the historical `min(vision_prob, kinematic_prob)` fusion (not the current linear additive ship), but the conclusion — **do not cascade GMC-Link onto trackers with native temporal memory** — holds independently of the fusion rule and remains a valid design constraint.
 
 ### The Double-Tracking Problem
 
