@@ -39,17 +39,19 @@ sys.path.insert(0, "/home/seanachan/iKUN")
 from gmc_link.demo_inference import load_neuralsort_tracks, load_ikun_scores
 from utils import expression_conversion as ikun_expression_conversion
 
-DATA_ROOT      = "/home/seanachan/GMC-Link/refer-kitti"
+# V1 defaults; override via env for V2 (iKUN-V2 cross-split eval).
+DATA_ROOT      = os.environ.get("IKUN_DATA_ROOT", "/home/seanachan/GMC-Link/refer-kitti")
 TRACK_DIR      = "/home/seanachan/GMC-Link/NeuralSORT"
-GT_TEMPLATE    = "/home/seanachan/data/Dataset/refer-kitti/gt_template_old"
-TEXT_FEAT_JSON = "/home/seanachan/GMC-Link/iKUN/text_feat_bboxNum_v1.json"
-CASCADE_FULL   = "/home/seanachan/GMC-Link/iKUN/ikun_results_v1_cascade_full.json"
+GT_TEMPLATE    = os.environ.get("IKUN_GT_TEMPLATE", "/home/seanachan/data/Dataset/refer-kitti/gt_template_old")
+TEXT_FEAT_JSON = os.environ.get("IKUN_TEXT_FEAT_JSON", "/home/seanachan/GMC-Link/iKUN/text_feat_bboxNum_v1.json")
+CASCADE_FULL   = os.environ.get("IKUN_CASCADE_JSON", "/home/seanachan/GMC-Link/iKUN/ikun_results_v1_cascade_full.json")
 _GMC_SUFFIX = os.environ.get("GMC_SUFFIX", "")  # e.g. "_seed0"
+_GMC_CACHE_VER = os.environ.get("GMC_CACHE_VER", "v1")  # v1|v2 cache filename tag
 RAW_COS    = os.environ.get("GMC_RAW_COS", "0") == "1"  # Arm B: GMC cache contains raw cosine [-1,+1]
-GMC_CACHE_TPL  = "/home/seanachan/GMC-Link/gmc_link/gmc_scores_v1_{seq}" + _GMC_SUFFIX + "_cache.json"
+GMC_CACHE_TPL  = "/home/seanachan/GMC-Link/gmc_link/gmc_scores_" + _GMC_CACHE_VER + "_{seq}" + _GMC_SUFFIX + "_cache.json"
 TRACKEVAL      = "/home/seanachan/TempRMOT/TrackEval/scripts/run_mot_challenge.py"
 _OUT_SUFFIX = os.environ.get("OUT_SUFFIX", "")  # e.g. "_seed0"
-OUT_ROOT       = "/home/seanachan/GMC-Link/hota_eval_ikun_linear_additive" + _OUT_SUFFIX
+OUT_ROOT       = os.environ.get("IKUN_OUT_ROOT", "/home/seanachan/GMC-Link/hota_eval_ikun_linear_additive" + _OUT_SUFFIX)
 
 TEST_SEQS = ["0005", "0011", "0013"]
 FRAMES = {"0005": (0, 296), "0011": (0, 372), "0013": (0, 339)}

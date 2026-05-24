@@ -252,3 +252,9 @@ gmc_link/depth_cache/
 # GMC score caches (derived from weights, reproducible)
 gmc_link/gmc_scores_*.json
 results/*.tsv
+
+# iKUN-V2 derived artifacts (reproducible from run_v2_inference + GT-shift scripts)
+ikun_v2_root/
+v2_gt_template_nsconv/
+iKUN/ikun_results_v2_*.json
+hota_eval_ikun_v2*/

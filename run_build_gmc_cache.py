@@ -23,9 +23,10 @@ from gmc_link.text_utils import TextEncoder
 from gmc_link.demo_inference import load_neuralsort_tracks, DummyTrack
 from gmc_link.depth_cache import DepthCache
 
-DATA_ROOT   = "refer-kitti"
+DATA_ROOT   = os.environ.get("GMC_DATA_ROOT", "refer-kitti")
 TRACK_DIR   = "NeuralSORT"
-FRAME_DIR   = "/home/seanachan/data/Dataset/refer-kitti/KITTI/training/image_02"
+FRAME_DIR   = os.environ.get("GMC_FRAME_DIR", "/home/seanachan/data/Dataset/refer-kitti/KITTI/training/image_02")
+CACHE_VER   = os.environ.get("GMC_CACHE_VER", "v1")  # cache filename version tag (v1|v2)
 GMC_WEIGHTS = os.environ.get("GMC_WEIGHTS", "gmc_link_weights_v1train.pth")
 GMC_SUFFIX  = os.environ.get("GMC_SUFFIX", "")  # appended before _cache.json: e.g. "_seed0"
 GMC_RAW_COS = os.environ.get("GMC_RAW_COS", "0") == "1"  # Arm B: dump raw cosine (skip sigmoid+EMA)
@@ -48,7 +49,7 @@ def merged_ns(seq):
 
 
 def build(seq):
-    cache_path = f"gmc_link/gmc_scores_v1_{seq}{GMC_SUFFIX}_cache.json"
+    cache_path = f"gmc_link/gmc_scores_{CACHE_VER}_{seq}{GMC_SUFFIX}_cache.json"
     if os.path.exists(cache_path):
         print(f"[gmc] cache exists → {cache_path}, skip")
         return
