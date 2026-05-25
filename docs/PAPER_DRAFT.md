@@ -111,13 +111,21 @@ This is a symmetric two-tower design with a shared nonlinear core (~628k params)
 
 ### Stage 4 — Decision-Level Linear Additive Fusion
 
-GMC-Link is fused with the host tracker at the **decision level only**. The fused score is, per architecture and per semantic axis (motion / appearance):
+GMC-Link is fused with the host tracker at the **decision level only**. In its parameter-free form, fusion is a bare additive combination of the two scores:
+
+```
+final_score = model_logit + raw_cos
+```
+
+This zero-hyperparameter form is the `{model} + GMC Baseline` (B2) used to measure whether the raw GMC signal helps at all, with nothing fit to the evaluation set.
+
+The shipped system generalizes this with three per-axis coefficients:
 
 ```
 final_score = model_logit + α · (sc · raw_cos + thr)
 ```
 
-where `α` scales the GMC contribution, `sc` calibrates the raw-cosine spread to the host logit's range, and `thr` is an additive bias. The motion axis applies to motion expressions; the appearance axis applies to appearance/static expressions.
+where `α` scales the GMC contribution, `sc` calibrates the raw-cosine spread to the host logit's range, and `thr` is an additive bias — applied per architecture and per semantic axis (motion / appearance). Setting (α, sc, thr) = (1, 1, 0) recovers the bare baseline above; the ship uses non-identity values (Section 5), which are fit to the evaluation sequences and therefore reported as a separate, tuned claim distinct from the parameter-free B2.
 
 This linear additive form is deliberately chosen over learned fusion. Two design negatives motivate it:
 1. **Feature-level injection** of motion embeddings into iKUN's CLIP visual pipeline causes catastrophic regression (−21.7% F1) — additive injection corrupts the CLIP representation.
@@ -144,11 +152,11 @@ We report **HOTA** exclusively (with its DetA/AssA decomposition where relevant)
 
 For each host architecture we report two baselines:
 1. **`{model} Baseline` (B1)** — the host tracker with no GMC.
-2. **`{model} + GMC Baseline` (B2)** — GMC fused with the *simple* recipe (α=1, sc=1, thr=0, raw cosine, no per-arch tuning), shared-weight aligner, n=3.
+2. **`{model} + GMC Baseline` (B2)** — the bare additive fusion `final = model_logit + raw_cos` (raw cosine, shared-weight aligner, no-EMA, **zero fitted coefficients**), n=3. This is the parameter-free probe: any lift here is GMC signal, not tuning.
 
-The shipped system adds the per-arch recipe on top of B2. B2 (n=3, 3-seq pooled V1):
+The shipped system adds the per-arch coefficient recipe on top of B2. B2 (n=3, 3-seq pooled V1):
 
-| arch | B1 (no GMC) | B2 = `{model} + GMC Baseline` (sw aligner, simple recipe α=1 sc=1 thr=0, n=3) |
+| arch | B1 (no GMC) | B2 = `{model} + GMC Baseline` (sw aligner, bare `model_logit + raw_cos`, n=3) |
 |---|---|---|
 | iKUN (cascade+simcalib, YOLOv8-NS) | 44.224 | 44.272 ± 0.018 (Δ +0.048) |
 | FlexHook V1 (Temp-NeuralSORT-kitti1) | 53.110 | 53.121 ± 0.005 (Δ +0.011) |
@@ -175,7 +183,9 @@ The iKUN B1 reproduces the paper README iKUN headline (paper 44.56; reproduced 4
 | **iKUN** (cascade+simcalib, YOLOv8-NS, 3-seq pooled) | 44.224 | **44.634 ± 0.066** | +0.410 | 44.564 | **+0.070** |
 | **FlexHook V1** (Temp-NeuralSORT-kitti1, 3-seq pooled) | 53.110 | **53.526 ± 0.087** | +0.416 | 53.824 | −0.298 |
 | **FlexHook V2** (Temp-NeuralSORT-kitti1, V2 labels, 4-seq pooled) | 42.526 | **42.807 ± 0.038** | +0.281 | 42.526 | **+0.281** |
-| **iKUN-V2** (cascade+simcalib, YOLOv8-NS, V2 labels) | [pending] | [pending] | [pending] | [pending] | [pending] |
+| **iKUN-V2** (cascade, NeuralSORT, V2 labels, 3-seq pooled, seed0)† | 31.434 | 31.427 (B2, zero-DOF)† | −0.007 | — | — |
+
+† iKUN-V2 is a **zero-shot cross-split cell**: V1-trained iKUN scored on V2 paraphrased expressions (it never saw V2 phrasings). Its cascade baseline collapses to 31.434 (vs V1's 44.224) because the CLIP text encoder cannot match unfamiliar paraphrases. GMC is **flat** at the zero-DOF recipe (`cascade + raw_cos`, −0.007); the per-arch ship recipe transferred from V1 *regresses* it (−2.78, the `thr` bias is miscalibrated for the weaker V2 score range). No published iKUN-V2 anchor exists. Single-seed (seed0); reported as a generalization probe, not a ship. GT was frame-shifted to NeuralSORT convention (FlexHook's V2 `gt_template_gen` is +1, an off-by-one worth ~5.6 HOTA).
 
 **Paper-beat count: 2/3** (iKUN +0.070; FlexHook V2 +0.281). For iKUN, all three seeds individually beat the paper anchor (44.582 / 44.612 / 44.708); one-sided t vs. paper p≈0.10 `[VERIFY: directional, not significant at α=0.05 — keep framing honest]`. The FlexHook V1 gap is **structural**: no tested configuration beats the V1 paper anchor 53.824 (the prior mlp+EMA ship reached 53.716, also short), and a 17-cell retune around the sw+no-EMA operating point capped at 53.623.
 
@@ -287,6 +297,6 @@ GMC-Link shows that ego-motion-compensated geometric reasoning, aligned with lan
 
 1. ~~Training batch size (256 per ship memos vs 128 in README loss section).~~ RESOLVED: 256 (`gmc_link/train.py` Stage-1 default); README corrected.
 2. V2 4-sequence seqmap (explicit sequence IDs for the FlexHook V2 pooled eval).
-3. iKUN-V2 row (currently being computed — placeholder).
+3. ~~iKUN-V2 row (currently being computed — placeholder).~~ RESOLVED: zero-shot cross-split cell, GMC flat at zero-DOF (B2 31.427 vs B1 31.434). Single-seed; see §5.1 footnote.
 4. iKUN-vs-paper significance framing (p≈0.10, directional; do not over-claim).
 5. Canonical count and full list of the "24 enhancement levers."

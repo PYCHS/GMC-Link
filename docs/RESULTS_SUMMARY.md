@@ -24,7 +24,8 @@ multi-seed statistics. Cite this file when writing the paper/thesis.
 | **EMA** | Legacy exponential-moving-average smoothing (`MotionBuffer` α=0.3, `ScoreBuffer` α=0.4, `cosine_buffer`). **OFF in the current ship.** raw_cos=True bypasses it regardless. |
 | **`shared_weight` (sw) aligner** | Per-modality Linear adapter (motion 13→256, lang 384→256) → shared 2-hidden MLP (256→512→512→256) → LN → L2-norm. Symmetric two-tower, shared nonlinear core. ~628k params. Current default arch. |
 | **`mlp` aligner (legacy)** | Independent dual-MLP per modality (motion 13→256→512→256, lang 384→256→512→256) → L2-norm. Asymmetric. ~627k params. Opt-in only. |
-| **Fusion (decision-level, linear additive)** | `final = model_logit + α·(sc·raw_cos + thr)`, applied per arch per axis (motion axis + appearance axis). |
+| **Fusion — baseline (B2, parameter-free)** | `final = model_logit + raw_cos`. Bare additive combination, zero fitted coefficients. |
+| **Fusion — ship (tuned)** | `final = model_logit + α·(sc·raw_cos + thr)`, per arch per axis (motion + appearance). (α,sc,thr)=(1,1,0) recovers B2; ship uses non-identity values fit to the eval seqs. |
 
 ### Two-baseline protocol labels
 
@@ -33,9 +34,10 @@ with full recipe in the label (never a bare "B1"/"B2" shorthand):
 
 - **B1 = `{model} Baseline` (no GMC):** the downstream consumer's own detector/tracker
   output with no GMC fusion. iKUN 44.224, FH V1 53.110, FH V2 42.526.
-- **B2 = `{model} + GMC Baseline` (sw aligner, simple-recipe α=1 sc=1 thr=0, raw cos, no-EMA, n=3):**
-  GMC fused with the simplest possible additive recipe (zero hand-tuning). The clean
-  anchor for all future "+X helps" Δ measurements.
+- **B2 = `{model} + GMC Baseline` (sw aligner, bare `final = model_logit + raw_cos`, raw cos, no-EMA, n=3):**
+  GMC fused with ZERO fitted coefficients — the parameter-free additive combination. Nothing is
+  tuned against the eval set, so any lift here is pure GMC signal. The clean anchor for all future
+  "+X helps" Δ measurements. (Equivalent to the ship formula at the identity point (α,sc,thr)=(1,1,0).)
 - **Ship = `{model} + GMC` (sw aligner, per-arch APPEAR-axis recipe, raw cos, no-EMA, n=3):**
   the 18-hyperparam hand-tuned recipe. The number cited as the headline result.
 - **Paper anchor:** the published HOTA for each consumer, reproduced locally where stated.
@@ -46,12 +48,14 @@ with full recipe in the label (never a bare "B1"/"B2" shorthand):
 
 All HOTA. n=3 seeds {0,1,2}. iKUN/FH-V1 = 3-seq pooled (0005/0011/0013); FH-V2 = 4-seq pooled.
 
-| Arch | B1: `{model} Baseline` (no GMC) | B2: `{model} + GMC` (sw, simple α=1 sc=1 thr=0, raw cos, no-EMA, n=3) | **Ship: `{model} + GMC` (sw, per-arch APPEAR-axis recipe, raw cos, no-EMA, n=3)** | Paper anchor | Δ ship vs paper |
+| Arch | B1: `{model} Baseline` (no GMC) | B2: `{model} + GMC` (sw, bare `logit + raw_cos`, no-EMA, n=3) | **Ship: `{model} + GMC` (sw, per-arch tuned recipe, raw cos, no-EMA, n=3)** | Paper anchor | Δ ship vs paper |
 |---|---|---|---|---|---|
 | **iKUN** (cascade + simcalib, YOLOv8-NS) | 44.224 | 44.272 ± 0.018 | **44.634 ± 0.066** | 44.564 | **+0.070** ✓ |
 | **FH V1** | 53.110 | 53.121 ± 0.005 | **53.526 ± 0.087** | 53.824 | −0.298 ✗ |
 | **FH V2** | 42.526 | 42.532 ± 0.002 | **42.807 ± 0.038** | 42.526 | **+0.281** ✓ |
-| **iKUN-V2** | [pending] | [pending] | [pending] | [pending] | [pending] |
+| **iKUN-V2** (cascade, NeuralSORT, V2 labels, seed0)† | 31.434 | 31.427 | — (V1 recipe regresses, 28.651)† | — | — |
+
+† **iKUN-V2 is a zero-shot cross-split probe, not a ship.** V1-trained iKUN scored on V2 paraphrased expressions (unseen phrasings) → cascade baseline collapses to 31.434 (vs V1 44.224). GMC **flat at zero-DOF** (B2 31.427, Δ−0.007). The V1 per-arch recipe *regresses* it to 28.651 (Δ−2.78) — `thr` bias miscalibrated for the weaker V2 score range. No published anchor. Single-seed. GT frame-shifted to NeuralSORT convention (FH `gt_template_gen` is TransRMOT +1; off-by-one ≈ 5.6 HOTA, baseline 25.866→31.434 after fix).
 
 **Paper-beat count: 2/3** (iKUN ✓, FH V2 ✓).
 
@@ -64,7 +68,7 @@ Notes:
   mlp+EMA ship (53.716) beats paper 53.824. A 17-cell retune around the sw+no-EMA
   coordinates capped at 53.623. The V1 local loss vs the legacy mlp ship does not affect
   the paper-beat claim (already lost in every tested config).
-- iKUN-V2 (4th cell) is being computed; rows marked `[pending]`.
+- **iKUN-V2 (4th cell): GMC flat at zero-DOF (B2 −0.007), completing the 2×2 arch×split grid 3/4 POS.** Lone non-POS cell, explained by domain shift (zero-shot V2 paraphrases), not GMC failure. Per-class: GMC's only mild-POS axis is APPEAR (+0.44); motion-axis NEG (−1.45 MOVING at sc=1) — the motion signal needs a functional host text-matcher to complement. Tuned probe best +0.29 (P3 α=0.5) was test-set hyperparameter selection (vanishes at zero-DOF) — NOT cited as a gain.
 
 ### Ship fusion recipe (locked, 2026-05-21)
 
@@ -129,14 +133,17 @@ Source: `results/flexhook_ship_noema_sw_20260520_064025.tsv`
 | 2 | 42.846 | 42.002 | 48.482 | 45.336 |
 | **Mean ± std** | **42.807 ± 0.038** | 41.950 ± 0.047 | 48.474 ± 0.141 | 45.427 ± 0.101 |
 
-### iKUN-V2 — [pending]
+### iKUN-V2 — seed0 only (zero-shot cross-split probe, NSconv GT)
 
-| Seed | Pooled | APPEAR | MOVING | STATIC |
+| Config (seed0) | Pooled | APPEAR | MOVING | STATIC |
 |---|---|---|---|---|
-| 0 | [pending] | [pending] | [pending] | [pending] |
-| 1 | [pending] | [pending] | [pending] | [pending] |
-| 2 | [pending] | [pending] | [pending] | [pending] |
-| **Mean ± std** | [pending] | [pending] | [pending] | [pending] |
+| B1 (no GMC) | 31.434 | 32.108 | 26.665 | 32.146 |
+| B2 bare `cascade + raw_cos` (zero-DOF) | 31.427 | 32.544 | 25.218 | 31.327 |
+| Δ (B2 − B1) | **−0.007** | +0.436 | −1.447 | −0.819 |
+| V1-recipe transferred (NOT used) | 28.651 | 30.264 | 20.278 | 27.294 |
+| best searched probe P3 (α=0.5, test-set-selected) | 31.727 | 32.593 | 26.357 | 32.131 |
+
+Single-seed (seed0) — a generalization probe, not a multi-seed ship. n=3 not run because the zero-DOF verdict is flat and the cell is confounded by domain shift (no ship claim to stabilize).
 
 ---
 
