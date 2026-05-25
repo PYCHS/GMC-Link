@@ -52,12 +52,19 @@ All HOTA. n=3 seeds {0,1,2}. iKUN/FH-V1 = 3-seq pooled (0005/0011/0013); FH-V2 =
 |---|---|---|---|---|---|
 | **iKUN** (cascade + simcalib, YOLOv8-NS) | 44.224 | 44.272 ± 0.018 | **44.634 ± 0.066** | 44.564 | **+0.070** ✓ |
 | **FH V1** | 53.110 | 53.121 ± 0.005 | **53.526 ± 0.087** | 53.824 | −0.298 ✗ |
-| **FH V2** | 42.526 | 42.532 ± 0.002 | **42.807 ± 0.038** | 42.526 | **+0.281** ✓ |
-| **iKUN-V2** (cascade, NeuralSORT, V2 labels, seed0)† | 31.434 | 31.427 | — (V1 recipe regresses, 28.651)† | — | — |
+| **FH V2** ⚠ | 42.526 | 42.532 ± 0.002 | **42.807 ± 0.038** | 42.526 | +0.281 (⚠ split mismatch) |
+| **iKUN-V2** ✗ | 31.434 | 31.427 (seed0) | — (V1 recipe regresses, 28.651) | — | invalid split |
 
-† **iKUN-V2 is a zero-shot cross-split probe, not a ship.** V1-trained iKUN scored on V2 paraphrased expressions (unseen phrasings) → cascade baseline collapses to 31.434 (vs V1 44.224). GMC **flat at zero-DOF** (B2 31.427, Δ−0.007). The V1 per-arch recipe *regresses* it to 28.651 (Δ−2.78) — `thr` bias miscalibrated for the weaker V2 score range. No published anchor. Single-seed. GT frame-shifted to NeuralSORT convention (FH `gt_template_gen` is TransRMOT +1; off-by-one ≈ 5.6 HOTA, baseline 25.866→31.434 after fix).
+> **⚠⚠ V2 SEQUENCE-SPLIT ERROR (2026-05-25, surfaced reviewing iKUN-V2).** Refer-KITTI **V2's official test split is sequences 0016–0020** (`annotations/test.json`). Both V2 rows above were evaluated on the WRONG sequences:
+> - **iKUN-V2 ✗ INVALID:** run on 0005/0011/0013 — all three are V2-**training** sequences. iKUN has no tracker output for the V2 test seqs (NeuralSORT only covers 0005/0011/0013). The 31.434 is inflated (training seqs, seen during training) vs the published iKUN-on-V2 expectation (~10 on held-out test). Not benchmark-comparable.
+> - **FH V2 ⚠ SUSPECT:** run on 0005/0011/0013 (train) + 0019 (test) — 3 train + 1 test. The "+0.281 vs published 42.526" claim is on a non-standard split and **must be re-verified on the official 0016–0020** before it can stand. FlexHook tracker output is only available locally for 0019 of the test set.
+> - **V1 rows are unaffected** — 0005/0011/0013 IS the official Refer-KITTI V1 test split.
+>
+> **To produce valid V2 results, need tracker outputs (iKUN NeuralSORT / FlexHook) on official test seqs 0016–0020 — currently unavailable locally.**
 
-**Paper-beat count: 2/3** (iKUN ✓, FH V2 ✓).
+iKUN-V2 detail (on the invalid train-seq split, for the record): zero-shot — V1-trained iKUN on V2 paraphrases → baseline collapses to 31.434 (vs V1 44.224). GMC flat with no tuning (Δ−0.007); V1 recipe regresses it (−2.78). GT was frame-shifted to NeuralSORT convention (FH `gt_template_gen` is +1; ~5.6 HOTA off-by-one, 25.866→31.434 after fix).
+
+**Paper-beat count (valid V1 only): 1/2** (iKUN V1 ✓; FH V1 short). V2 cells pending valid-split re-run.
 
 Notes:
 - iKUN paper anchor 44.564 is **bit-exact reproduced** locally (Δ=+0.004 vs paper README
@@ -68,7 +75,7 @@ Notes:
   mlp+EMA ship (53.716) beats paper 53.824. A 17-cell retune around the sw+no-EMA
   coordinates capped at 53.623. The V1 local loss vs the legacy mlp ship does not affect
   the paper-beat claim (already lost in every tested config).
-- **iKUN-V2 (4th cell): GMC flat at zero-DOF (B2 −0.007), completing the 2×2 arch×split grid 3/4 POS.** Lone non-POS cell, explained by domain shift (zero-shot V2 paraphrases), not GMC failure. Per-class: GMC's only mild-POS axis is APPEAR (+0.44); motion-axis NEG (−1.45 MOVING at sc=1) — the motion signal needs a functional host text-matcher to complement. Tuned probe best +0.29 (P3 α=0.5) was test-set hyperparameter selection (vanishes at zero-DOF) — NOT cited as a gain.
+- **iKUN-V2 (4th cell): GMC flat at no-tuning (B2 −0.007), completing the 2×2 arch×split grid 3/4 POS.** Lone non-POS cell, explained by domain shift (zero-shot V2 paraphrases), not GMC failure. Per-class: GMC's only mild-POS axis is APPEAR (+0.44); motion-axis NEG (−1.45 MOVING at sc=1) — the motion signal needs a functional host text-matcher to complement. Tuned probe best +0.29 (P3 α=0.5) was test-set hyperparameter selection (vanishes at no-tuning) — NOT cited as a gain.
 
 ### Ship fusion recipe (locked, 2026-05-21)
 
@@ -138,12 +145,12 @@ Source: `results/flexhook_ship_noema_sw_20260520_064025.tsv`
 | Config (seed0) | Pooled | APPEAR | MOVING | STATIC |
 |---|---|---|---|---|
 | B1 (no GMC) | 31.434 | 32.108 | 26.665 | 32.146 |
-| B2 bare `cascade + raw_cos` (zero-DOF) | 31.427 | 32.544 | 25.218 | 31.327 |
+| B2 bare `cascade + raw_cos` (no-tuning) | 31.427 | 32.544 | 25.218 | 31.327 |
 | Δ (B2 − B1) | **−0.007** | +0.436 | −1.447 | −0.819 |
 | V1-recipe transferred (NOT used) | 28.651 | 30.264 | 20.278 | 27.294 |
 | best searched probe P3 (α=0.5, test-set-selected) | 31.727 | 32.593 | 26.357 | 32.131 |
 
-Single-seed (seed0) — a generalization probe, not a multi-seed ship. n=3 not run because the zero-DOF verdict is flat and the cell is confounded by domain shift (no ship claim to stabilize).
+Single-seed (seed0) — a generalization probe, not a multi-seed ship. n=3 not run because the no-tuning verdict is flat and the cell is confounded by domain shift (no ship claim to stabilize).
 
 ---
 
