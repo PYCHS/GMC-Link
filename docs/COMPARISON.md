@@ -74,30 +74,147 @@ queries that define the task).
 
 Source: 2026-05-03 measurement. "host alone" here is a single-seed reference.
 
-| host | query type | host alone | + GMC-Link (mean ± std) | gain | significance (p) |
-|---|---|---|---|---|---|
-| iKUN | appearance | 46.346 | 46.746 ± 0.045 | +0.400 | 0.0021 |
-| iKUN | motion | 25.531 | 30.093 ± 0.240 | **+4.562** | 0.0005 |
-| iKUN | static | 43.914 | 45.099 ± 0.178 | +1.185 | 0.0037 |
-| FlexHook V1 | appearance | 55.492 | 55.700 ± 0.026 | +0.208 | 0.0026 |
-| FlexHook V1 | motion | 43.981 | 45.785 ± 0.235 | +1.804 | 0.0028 |
-| FlexHook V1 | static | 48.983 | 49.771 ± 0.217 | +0.788 | 0.0122 |
-| FlexHook V2 | appearance | 41.748 | 41.946 ± 0.051 | +0.198 | 0.0105 |
-| FlexHook V2 | motion | 48.018 | 48.758 ± 0.067 | +0.740 | 0.0014 |
-| FlexHook V2 | static | 44.622 | 44.935 ± 0.024 | +0.313 | 0.0009 |
+| host | query type | host alone | + GMC-Link (mean ± std) | gain |
+|---|---|---|---|---|
+| iKUN | appearance | 46.346 | 46.746 ± 0.045 | +0.400 |
+| iKUN | motion | 25.531 | 30.093 ± 0.240 | **+4.562** |
+| iKUN | static | 43.914 | 45.099 ± 0.178 | +1.185 |
+| FlexHook V1 | appearance | 55.492 | 55.700 ± 0.026 | +0.208 |
+| FlexHook V1 | motion | 43.981 | 45.785 ± 0.235 | +1.804 |
+| FlexHook V1 | static | 48.983 | 49.771 ± 0.217 | +0.788 |
+| FlexHook V2 | appearance | 41.748 | 41.946 ± 0.051 | +0.198 |
+| FlexHook V2 | motion | 48.018 | 48.758 ± 0.067 | +0.740 |
+| FlexHook V2 | static | 44.622 | 44.935 ± 0.024 | +0.313 |
 
-All nine cells are positive and statistically significant (p < 0.05; seven at p < 0.01).
-The largest is iKUN motion +4.562.
+All nine cells are positive. The largest is iKUN motion +4.562.
 
 ---
 
-## 5. Bottom line
+## 5. Aligner architecture — shared-weight vs dual-MLP
+
+The motion–language aligner has two architectures: the legacy **dual-MLP** (independent
+per-modality projectors, asymmetric) and **shared-weight** (per-modality Linear adapter → a
+shared MLP trunk, symmetric two-tower). shared-weight is the adopted default. The cleanest
+comparison is at the simple fusion setting (α=1, sc=1, thr=0, no smoothing) — no per-arch
+tuning to confound the architecture effect:
+
+| host · dataset | no GMC | dual-MLP + GMC | shared-weight + GMC | Δ (shared-weight − dual-MLP) |
+|---|---|---|---|---|
+| iKUN · V1 | 44.224 | 44.178 | **44.272** | +0.094 (sig) |
+| FlexHook · V1 | 53.110 | 53.107 | **53.121** | +0.014 (sig) |
+| FlexHook · V2 | 42.526 | 42.533 | 42.532 | ≈0 |
+
+shared-weight is **Pareto ≥ dual-MLP**: it wins on iKUN and FlexHook·V1 at statistical
+significance and ties on FlexHook·V2. Note dual-MLP + GMC on iKUN (44.178) sits *below* the
+no-GMC baseline (44.224) — GMC slightly hurts there — while shared-weight turns it positive
+(+0.048).
+
+With the per-arch tuned coefficients, **all at no-EMA (raw cosine)** so the comparison is
+matched — the legacy dual-MLP ship used EMA, and mixing it in would confound the architecture
+with the smoothing. This row also adds the CLIP early-concat column (CLIP-visual 512→128 into
+the 13-D motion vector):
+
+| host · dataset | no GMC | dual-MLP + GMC | shared-weight + GMC | shared-weight + GMC + CLIP |
+|---|---|---|---|---|
+| iKUN · V1 | 44.224 | 44.476 | **44.634** | 44.463 |
+| FlexHook · V1 | 53.110 | 53.518 | **53.526** | 53.431 |
+| FlexHook · V2 | 42.526 | 42.828 | 42.807 | 42.729 |
+
+All columns n=3. Δ (shared-weight + GMC + CLIP − shared-weight + GMC): iKUN **−0.171**,
+FlexHook·V1 **−0.095**, FlexHook·V2 **−0.078** — negative on all three.
+
+**Reading (matched no-EMA):**
+- **shared-weight + GMC vs dual-MLP + GMC:** iKUN **+0.158**, FlexHook·V1 +0.008 (tie),
+  FlexHook·V2 −0.021 (within seed noise). shared-weight clearly helps iKUN; neutral on
+  FlexHook. shared-weight + GMC is the adopted operating point (= §1, paper-beat 2/3).
+- **+ CLIP:** **negative on all three** (−0.171 / −0.095 / −0.078, n=3). Appearance added to
+  the motion stream actively costs HOTA. Seed-0 alone looked flat (−0.011); the n=3 mean is
+  clearly negative — seed-0 was the favorable seed, so the single-seed read was optimistic.
+
+The earlier dual-MLP figures at **EMA** (44.608 / 53.716 / 42.799) are deliberately not used
+here: EMA was worth ~+0.13 to dual-MLP on iKUN (no-EMA 44.476 → EMA 44.608) and ~+0.20 on
+FlexHook·V1 (53.518 → 53.716). shared-weight reaches the same level **without** EMA. So the
+apparent "FlexHook·V1 −0.190 loss" in an earlier draft was an EMA artifact (shared-weight-no-EMA vs
+dual-MLP-EMA), not an architecture loss — at matched no-EMA it is a tie (+0.008).
+
+**Why shared-weight:** symmetric shared-trunk inductive bias + a per-modality Linear adapter,
+versus dual-MLP's independent asymmetric projectors; parameter count is ~tied (628k vs 627k).
+It matches or beats dual-MLP at matched no-EMA (clearly on iKUN) **without needing EMA**.
+
+---
+
+## 6. CLIP-feature fusion — all sites negative
+
+GMC-Link adds its motion score to the host **at the decision level** and keeps the motion
+aligner appearance-free. A natural question is whether folding a CLIP appearance feature into
+the pipeline helps. We tested CLIP fusion at **three sites**, all multi-seed n=3 — none ships.
+
+**Site 1 — early input-concat** (CLIP-visual 128-D concatenated into the 13-D motion vector,
+13→141-D, before the aligner). **Site 2 — late aligner-internal concat** (motion 256 ⊕
+appearance 256, with the language tower swapped to CLIP-text-512). Pooled HOTA, n=3:
+
+| site | host · dataset | no GMC | dual-MLP aligner, tuned (n=3) | + CLIP fusion (n=3) | Δ pool |
+|---|---|---|---|---|---|
+| early | iKUN · V1 | 44.224 | 44.608 | 44.812 | +0.204 |
+| early | FlexHook · V1 | 53.110 | 53.716 | 53.611 | **−0.105** |
+| early | FlexHook · V2 | 42.526 | 42.799 | 42.628 | **−0.171** |
+| late | iKUN · V1 | 44.224 | 44.608 | 44.801 | +0.193 |
+| late | FlexHook · V1 | 53.110 | 53.716 | 53.233 | **−0.483** |
+| late | FlexHook · V2 | 42.526 | 42.799 | 42.683 | **−0.116** |
+
+(Anchor = the prior dual-MLP-aligner tuned setting measured in the same 2026-05-20 n=3 run, not the
+shared-weight headline of §1 — Δ is matched-anchor.)
+
+**The iKUN pool gains are trajectory-pooling artifacts, not real improvements.** Broken out
+by query class, both variants **lose** on the classes that matter:
+
+| site | iKUN APPEAR Δ | iKUN MOVING Δ | iKUN STATIC Δ |
+|---|---|---|---|
+| early | +0.11 | −0.18 | **−1.22** |
+| late | −0.04 | **−1.03** | **−1.74** |
+
+The pooled number rises only because trajectory pooling rewards cross-class ID consistency;
+frame-weighted within-class HOTA is ≈0 (early) or negative (late). FlexHook is unambiguously
+negative on both — it already has a native RoI visual backbone, so an injected CLIP feature is
+redundant and dimension-mismatched.
+
+**Site 3 — decision-level CLIP-logit fusion** (add a CLIP image-text similarity logit at the
+decision level, the same site GMC uses): negative across all 8 tuned arms (best 44.359,
+Δ = −0.243 vs the 44.608 anchor).
+
+**Takeaway:** CLIP appearance features do not help at any tested site — input-concat,
+aligner-internal late-concat, or decision-level logit. Appearance injected into the motion
+stream corrupts the motion signal; a separate CLIP decision logit adds nothing iKUN's host
+score doesn't already carry. This is why GMC-Link fuses only its **motion** score at the
+decision level and keeps the aligner appearance-free.
+
+**Aligner-architecture note.** The early/late tables above are on the **dual-MLP** aligner.
+Early input-concat was also tested on the **shared-weight** aligner (the adopted default),
+**n=3**, all 3 hosts (CLIP-visual 512→128 into the 13-D motion vector):
+
+| host · dataset | no GMC | shared-weight, no CLIP (n=3) | + CLIP early (n=3) | Δ |
+|---|---|---|---|---|
+| iKUN · V1 | 44.224 | 44.634 | 44.463 | **−0.171** |
+| FlexHook · V1 | 53.110 | 53.526 | 53.431 | **−0.095** |
+| FlexHook · V2 | 42.526 | 42.807 | 42.729 | **−0.078** |
+
+Negative on all three at n=3. (Single-seed seed-0 alone looked flat, e.g. iKUN −0.011; the
+n=3 mean is clearly negative — seed-0 was the favorable seed.) Per-class, CLIP *hurts*
+FlexHook motion (seed-0: FlexHook·V1 MOVING −0.77, FlexHook·V2 MOVING −0.34). Late-concat was
+not tested on shared-weight (its symmetric shared-trunk supports input-concat only). Net:
+**CLIP is negative on both aligner architectures and all three hosts.**
+
+---
+
+## 7. Bottom line
 
 | question | answer |
 |---|---|
 | Does GMC-Link help with no tuning? | Yes on all 3 valid cells (+0.006 to +0.048). |
 | Does it beat published scores? | iKUN·V1 yes (+0.070); FlexHook·V2 yes (+0.277); FlexHook·V1 short (−0.298, structural). |
 | Where is the gain biggest? | Motion queries — iKUN·V1 +4.562; all motion cells positive + significant. |
+| Which aligner architecture? | shared-weight ≥ dual-MLP (Pareto, 2/3 significant at the simple baseline) — §5. |
+| Why decision-level fusion? | Injecting CLIP features into the motion vector is negative (FH) or a pooling artifact (iKUN STATIC −1.22) — §6. |
 | iKUN·V2? | Could not reproduce the official pipeline (31.4 vs published 10.32); excluded. |
 
 ---

@@ -225,6 +225,8 @@ class GMCLinkManager:
         raw_cos: bool = False,
         depth_z_lookup: Optional[Dict[int, float]] = None,
         seq: Optional[str] = None,
+        frame_id: Optional[int] = None,
+        clip_feat_cache: Optional[dict] = None,
     ) -> Tuple[Dict[int, float], Dict[int, np.ndarray], Dict[int, float]]:
         """
         Process a frame: compute centroid-difference velocities per tracked object,
@@ -546,9 +548,18 @@ class GMCLinkManager:
         ).to(self.device)
 
         # Runtime CLIP B/32 forward on tracker bbox crops (Exp 39 path).
+        # CLIP features are expression-independent (same frame+boxes across exprs),
+        # so cache per frame_id when a shared cache is supplied — avoids re-encoding
+        # the identical crops once per expression.
         clip_tensor = None
         if self.use_clip_feat and self._clip_model is not None:
-            clip_tensor = self.encode_clip_image_bboxes(frame, clip_bbox_xyxy)
+            if clip_feat_cache is not None and frame_id is not None:
+                clip_tensor = clip_feat_cache.get(frame_id)
+                if clip_tensor is None:
+                    clip_tensor = self.encode_clip_image_bboxes(frame, clip_bbox_xyxy)
+                    clip_feat_cache[frame_id] = clip_tensor
+            else:
+                clip_tensor = self.encode_clip_image_bboxes(frame, clip_bbox_xyxy)
 
         with torch.no_grad():
             motion_emb, lang_emb = self.aligner.encode(

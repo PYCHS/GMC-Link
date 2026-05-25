@@ -143,13 +143,22 @@ class MotionLanguageAligner(nn.Module):
             raise ValueError("fusion_site='late_concat' requires use_clip_feat=True")
 
         if architecture == "shared_weight":
-            if use_clip_feat:
-                raise ValueError("shared_weight does not support use_clip_feat (keep simple)")
             if lang_passthrough:
                 raise ValueError("shared_weight does not support lang_passthrough")
             if identity_init_depth:
                 raise ValueError("shared_weight does not support identity_init_depth")
-            self.motion_adapter = nn.Linear(motion_dim, embed_dim)
+            if use_clip_feat and fusion_site != "input_concat":
+                raise ValueError("shared_weight CLIP supports input_concat only")
+            if use_clip_feat:
+                self.clip_proj = nn.Linear(clip_feat_dim, clip_proj_dim)
+                # Zero-init gate: clip_proj(x)=0 → concat=[motion, zeros] → bit-exact
+                # to the no-CLIP shared_weight baseline at step 0.
+                nn.init.zeros_(self.clip_proj.weight)
+                nn.init.zeros_(self.clip_proj.bias)
+                adapter_in = motion_dim + clip_proj_dim
+            else:
+                adapter_in = motion_dim
+            self.motion_adapter = nn.Linear(adapter_in, embed_dim)
             self.lang_adapter = nn.Linear(lang_dim, embed_dim)
             self.shared_weight = nn.Sequential(
                 nn.Linear(embed_dim, 512),
@@ -273,6 +282,12 @@ class MotionLanguageAligner(nn.Module):
             lang_emb:     (N, embed_dim) or (M, embed_dim) L2-normalized language embeddings.
         """
         if self.architecture == "shared_weight":
+            if self.use_clip_feat:
+                if clip_feats is None:
+                    raise ValueError("clip_feats required when use_clip_feat=True")
+                motion_feats = torch.cat(
+                    [motion_feats, self.clip_proj(clip_feats)], dim=-1
+                )
             m = self.motion_adapter(motion_feats)
             l = self.lang_adapter(lang_feats)
             motion_emb = F.normalize(self.shared_weight(m), p=2, dim=-1)

@@ -93,6 +93,7 @@ def build(seq):
     print(f"  {len(expressions)} exprs, {total_frames} frames, {sum(len(v) for v in ns_tracks.values())} dets total")
 
     cache = {}
+    clip_cache = {}  # frame_id -> CLIP feats; shared across exprs (CLIP is expr-independent)
     for expression in tqdm(expressions, desc=f"gmc-expr-{seq}"):
         text_emb = encoder.encode(expression.replace("-", " ")).to(DEVICE)
         linker = GMCLinkManager(weights_path=GMC_WEIGHTS, device=DEVICE, lang_dim=lang_dim, world_xy=world_xy)
@@ -114,7 +115,7 @@ def build(seq):
                     z = depth_cache.lookup(oid, f1)
                     if z is not None:
                         depth_z_lookup[oid] = float(z)
-            scores, _, _ = linker.process_frame(frame_img, active, text_emb, detections=det_arr, raw_cos=GMC_RAW_COS, depth_z_lookup=depth_z_lookup, seq=seq)
+            scores, _, _ = linker.process_frame(frame_img, active, text_emb, detections=det_arr, raw_cos=GMC_RAW_COS, depth_z_lookup=depth_z_lookup, seq=seq, frame_id=f1, clip_feat_cache=clip_cache)
             for oid, g in scores.items():
                 per_expr.setdefault(str(f1), {})[str(oid)] = float(g)
         cache[expression] = per_expr
