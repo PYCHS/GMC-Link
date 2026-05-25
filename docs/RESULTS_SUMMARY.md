@@ -52,30 +52,37 @@ All HOTA. n=3 seeds {0,1,2}. iKUN/FH-V1 = 3-seq pooled (0005/0011/0013); FH-V2 =
 |---|---|---|---|---|---|
 | **iKUN** (cascade + simcalib, YOLOv8-NS) | 44.224 | 44.272 ± 0.018 | **44.634 ± 0.066** | 44.564 | **+0.070** ✓ |
 | **FH V1** | 53.110 | 53.121 ± 0.005 | **53.526 ± 0.087** | 53.824 | −0.298 ✗ |
-| **FH V2** ⚠ | 42.526 | 42.532 ± 0.002 | **42.807 ± 0.038** | 42.526 | +0.281 (⚠ split mismatch) |
-| **iKUN-V2** ✗ | 31.434 | 31.427 (seed0) | — (V1 recipe regresses, 28.651) | — | invalid split |
+| **FH V2** | 42.526 | 42.532 ± 0.002 | **42.807 ± 0.038** | 42.53 | **+0.277** ✓ |
 
-> **⚠⚠ V2 SEQUENCE-SPLIT ERROR (2026-05-25, surfaced reviewing iKUN-V2).** Refer-KITTI **V2's official test split is sequences 0016–0020** (`annotations/test.json`). Both V2 rows above were evaluated on the WRONG sequences:
-> - **iKUN-V2 ✗ INVALID:** run on 0005/0011/0013 — all three are V2-**training** sequences. iKUN has no tracker output for the V2 test seqs (NeuralSORT only covers 0005/0011/0013). The 31.434 is inflated (training seqs, seen during training) vs the published iKUN-on-V2 expectation (~10 on held-out test). Not benchmark-comparable.
-> - **FH V2 ⚠ SUSPECT:** run on 0005/0011/0013 (train) + 0019 (test) — 3 train + 1 test. The "+0.281 vs published 42.526" claim is on a non-standard split and **must be re-verified on the official 0016–0020** before it can stand. FlexHook tracker output is only available locally for 0019 of the test set.
-> - **V1 rows are unaffected** — 0005/0011/0013 IS the official Refer-KITTI V1 test split.
->
-> **To produce valid V2 results, need tracker outputs (iKUN NeuralSORT / FlexHook) on official test seqs 0016–0020 — currently unavailable locally.**
+> **Note — official V2 test split (verified 2026-05-25, TempRMOT repo).** Refer-KITTI V2's
+> official test sequences are **0005, 0011, 0013, 0019** (the TempRMOT `refer-kitti-v2.train`
+> file excludes them; the test `seqmap.txt` lists them). FH V2 above is on this correct split,
+> and its "host alone" 42.526 reproduces the published FlexHook-best **42.53** (TempRMOT paper
+> Table 3 / FlexHook paper Table 1), so the +0.277 ship gain is a valid paper-beat.
+> *(An earlier note here claimed the V2 test split was 0016–0020 from the local
+> `annotations/test.json` — that was a misread of a COCO-detection file, now corrected.)*
 
-iKUN-V2 detail (on the invalid train-seq split, for the record): zero-shot — V1-trained iKUN on V2 paraphrases → baseline collapses to 31.434 (vs V1 44.224). GMC flat with no tuning (Δ−0.007); V1 recipe regresses it (−2.78). GT was frame-shifted to NeuralSORT convention (FH `gt_template_gen` is +1; ~5.6 HOTA off-by-one, 25.866→31.434 after fix).
+**Paper-beat count: 2/3** (iKUN V1 ✓ +0.070, FH V2 ✓ +0.277; FH V1 short −0.298, structural).
 
-**Paper-beat count (valid V1 only): 1/2** (iKUN V1 ✓; FH V1 short). V2 cells pending valid-split re-run.
+**iKUN-V2 — attempted, excluded (not benchmark-valid).** Official iKUN-V2 = **10.32** HOTA
+(TempRMOT paper). Our attempt scored 31.4 — a 3× gap from a **protocol mismatch**, not a
+result: it paired a V1-trained iKUN with NeuralSORT tracks + FlexHook's V2 GT on 3 of the 4
+test seqs (no iKUN/NeuralSORT output for 0019), none of which matches iKUN's official V2
+pipeline. GMC's effect on it (flat, −0.007 no-tuning) is not a meaningful benchmark
+statement. A valid iKUN-V2 needs iKUN's own V2 tracker outputs (unavailable here). Recorded
+in `project_ikun_v2_crosssplit_flat_2026_05_25` as an internal note only.
 
 Notes:
 - iKUN paper anchor 44.564 is **bit-exact reproduced** locally (Δ=+0.004 vs paper README
   44.56; paper-pure end-to-end `iKUN/test.py` + `iKUN_cascade_attention.pth` + simcalib +
   cascade KUM + YOLOv8-NS + `gt_template_old/` + 3-seq pooled).
-- FH V2 paper anchor and B1 coincide (42.526): paper FH V2 number == FH V2 raw baseline.
+- FH V2 "host alone" baseline (42.526) reproduces the published FlexHook-best HOTA (42.53,
+  TempRMOT paper Table 3 / FlexHook paper Table 1); the ship 42.807 beats it by +0.277.
 - **FH V1 paper-gap is structural.** Neither the current sw ship (53.526) nor the prior
   mlp+EMA ship (53.716) beats paper 53.824. A 17-cell retune around the sw+no-EMA
   coordinates capped at 53.623. The V1 local loss vs the legacy mlp ship does not affect
   the paper-beat claim (already lost in every tested config).
-- **iKUN-V2 (4th cell): GMC flat at no-tuning (B2 −0.007), completing the 2×2 arch×split grid 3/4 POS.** Lone non-POS cell, explained by domain shift (zero-shot V2 paraphrases), not GMC failure. Per-class: GMC's only mild-POS axis is APPEAR (+0.44); motion-axis NEG (−1.45 MOVING at sc=1) — the motion signal needs a functional host text-matcher to complement. Tuned probe best +0.29 (P3 α=0.5) was test-set hyperparameter selection (vanishes at no-tuning) — NOT cited as a gain.
+- **iKUN-V2: EXCLUDED (protocol mismatch, not benchmark-valid).** Official iKUN-V2 = 10.32 HOTA; our attempt = 31.4 (3× gap) because it paired a V1-trained iKUN with NeuralSORT tracks + FlexHook's V2 GT on 3 of 4 test seqs — not iKUN's official V2 pipeline. GMC flat (−0.007) on that non-comparable baseline. Not part of the headline grid. Internal-only diagnostic: GMC's only mild-POS axis was APPEAR (+0.44); motion-axis NEG (−1.45 MOVING at sc=1). The tuned +0.29 probe was test-set selection and is not cited.
 
 ### Ship fusion recipe (locked, 2026-05-21)
 
@@ -140,7 +147,7 @@ Source: `results/flexhook_ship_noema_sw_20260520_064025.tsv`
 | 2 | 42.846 | 42.002 | 48.482 | 45.336 |
 | **Mean ± std** | **42.807 ± 0.038** | 41.950 ± 0.047 | 48.474 ± 0.141 | 45.427 ± 0.101 |
 
-### iKUN-V2 — seed0 only (zero-shot cross-split probe, NSconv GT)
+### iKUN-V2 — seed0 only (EXCLUDED: protocol mismatch vs official iKUN-V2 = 10.32; internal diagnostic)
 
 | Config (seed0) | Pooled | APPEAR | MOVING | STATIC |
 |---|---|---|---|---|

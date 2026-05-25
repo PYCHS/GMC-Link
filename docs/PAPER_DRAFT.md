@@ -10,7 +10,7 @@ Referring Multi-Object Tracking (RMOT) asks a tracker to retain only those objec
 
 We present **GMC-Link**, a lightweight, plug-and-play module that injects ego-motion-compensated geometric reasoning into such frameworks at the decision level. GMC-Link (1) estimates frame-to-frame camera motion with foreground-masked ORB + RANSAC homography, (2) composes cumulative homographies to compute **multi-scale residual velocity** (raw motion minus ego motion at temporal gaps of 2, 5, and 10 frames), yielding a compact **13-dimensional motion vector**, (3) aligns that motion vector with the language expression in a shared embedding space via a symmetric *shared-weight* aligner trained with symmetric InfoNCE + False-Negative Masking, and (4) fuses the resulting score with the host tracker's logit through a **per-architecture linear additive** rule.
 
-Across a 3-architecture cross-validation (iKUN, FlexHook V1, FlexHook V2), GMC-Link improves 3-/4-sequence pooled HOTA on Refer-KITTI and, in 2 of 3 settings, exceeds the corresponding published anchor (iKUN +0.070, FlexHook V2 +0.281), with the largest gains concentrated in the motion class (e.g., iKUN MOVING +4.56 pooled HOTA). We further report an extensive negative-result study: 24 enhancement levers tested after the ceiling was reached, establishing that the remaining gap is representation/pipeline-bound rather than tuning-bound. GMC-Link is explicitly **not** for temporally-aware trackers (e.g., TempRMOT), where redundant temporal smoothing causes structural regression.
+Across a 3-architecture cross-validation (iKUN, FlexHook V1, FlexHook V2), GMC-Link improves 3-/4-sequence pooled HOTA on Refer-KITTI and, in 2 of 3 settings, exceeds the corresponding published anchor (iKUN +0.070, FlexHook V2 +0.277), with the largest gains concentrated in the motion class (e.g., iKUN MOVING +4.56 pooled HOTA). We further report an extensive negative-result study: 24 enhancement levers tested after the ceiling was reached, establishing that the remaining gap is representation/pipeline-bound rather than tuning-bound. GMC-Link is explicitly **not** for temporally-aware trackers (e.g., TempRMOT), where redundant temporal smoothing causes structural regression.
 
 ---
 
@@ -182,10 +182,20 @@ The iKUN B1 reproduces the paper README iKUN headline (paper 44.56; reproduced 4
 |---|---|---|---|---|---|
 | **iKUN** (cascade+simcalib, YOLOv8-NS, 3-seq pooled) | 44.224 | **44.634 ± 0.066** | +0.410 | 44.564 | **+0.070** |
 | **FlexHook V1** (Temp-NeuralSORT-kitti1, 3-seq pooled) | 53.110 | **53.526 ± 0.087** | +0.416 | 53.824 | −0.298 |
-| **FlexHook V2** (Temp-NeuralSORT-kitti1, V2 labels, 4-seq pooled) | 42.526 | **42.807 ± 0.038** | +0.281 | 42.526 | **+0.281** |
-| **iKUN-V2** (cascade, NeuralSORT, V2 labels, 3-seq pooled, seed0)† | 31.434 | 31.427 (B2, no-tuning)† | −0.007 | — | — |
+| **FlexHook V2** (Temp-NeuralSORT-kitti1, V2 labels, 4-seq pooled) | 42.526 | **42.807 ± 0.038** | +0.281 | 42.53 | **+0.277** |
 
-† iKUN-V2 is a **zero-shot cross-split cell**: V1-trained iKUN scored on V2 paraphrased expressions (it never saw V2 phrasings). Its cascade baseline collapses to 31.434 (vs V1's 44.224) because the CLIP text encoder cannot match unfamiliar paraphrases. GMC is **flat** at the no-tuning recipe (`cascade + raw_cos`, −0.007); the per-arch ship recipe transferred from V1 *regresses* it (−2.78, the `thr` bias is miscalibrated for the weaker V2 score range). No published iKUN-V2 anchor exists. Single-seed (seed0); reported as a generalization probe, not a ship. GT was frame-shifted to NeuralSORT convention (FlexHook's V2 `gt_template_gen` is +1, an off-by-one worth ~5.6 HOTA).
+The V2 row is on the **official Refer-KITTI V2 test split (0005/0011/0013/0019**, verified
+against the TempRMOT repo split files). Its baseline 42.526 reproduces the published
+FlexHook-best HOTA (42.53; TempRMOT paper Table 3 / FlexHook paper Table 1), so the +0.277
+ship gain is a valid paper-beat. **Paper-beat: 2/3** (iKUN V1, FlexHook V2).
+
+> **iKUN-V2 attempted but excluded (not benchmark-valid).** Official iKUN-V2 = 10.32 HOTA
+> (TempRMOT paper). Our attempt scored 31.4 — a 3× gap from a protocol mismatch: it paired a
+> V1-trained iKUN with NeuralSORT tracks + FlexHook's V2 GT on 3 of the 4 official test seqs
+> (no iKUN/NeuralSORT output for 0019), none matching iKUN's official V2 pipeline. GMC's effect
+> (flat, −0.007 no-tuning) on that non-comparable baseline is not a benchmark statement. A valid
+> iKUN-V2 needs iKUN's own V2 tracker outputs (unavailable here). `[VERIFY: re-run if iKUN V2
+> tracker outputs become available.]`
 
 **Paper-beat count: 2/3** (iKUN +0.070; FlexHook V2 +0.281). For iKUN, all three seeds individually beat the paper anchor (44.582 / 44.612 / 44.708); one-sided t vs. paper p≈0.10 `[VERIFY: directional, not significant at α=0.05 — keep framing honest]`. The FlexHook V1 gap is **structural**: no tested configuration beats the V1 paper anchor 53.824 (the prior mlp+EMA ship reached 53.716, also short), and a 17-cell retune around the sw+no-EMA operating point capped at 53.623.
 
@@ -297,6 +307,6 @@ GMC-Link shows that ego-motion-compensated geometric reasoning, aligned with lan
 
 1. ~~Training batch size (256 per ship memos vs 128 in README loss section).~~ RESOLVED: 256 (`gmc_link/train.py` Stage-1 default); README corrected.
 2. V2 4-sequence seqmap (explicit sequence IDs for the FlexHook V2 pooled eval).
-3. ~~iKUN-V2 row (currently being computed — placeholder).~~ RESOLVED: zero-shot cross-split cell, GMC flat at no-tuning (B2 31.427 vs B1 31.434). Single-seed; see §5.1 footnote.
+3. ~~iKUN-V2 row.~~ RESOLVED: EXCLUDED — could not reproduce iKUN's official V2 pipeline (our 31.4 vs published 10.32; protocol mismatch). Grid is the 3 valid cells. See §5.1.
 4. iKUN-vs-paper significance framing (p≈0.10, directional; do not over-claim).
 5. Canonical count and full list of the "24 enhancement levers."
