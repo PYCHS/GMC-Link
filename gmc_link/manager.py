@@ -37,6 +37,11 @@ class GMCLinkManager:
     # Multi-scale frame gaps matching training
     FRAME_GAPS = [2, 5, 10]  # short, mid, long
 
+    # World-XY projection scale: tunes 95th-percentile world dX/dY input to ~1.0
+    # so MLP inputs sit near unit magnitude after Z/f projection. Calibrated
+    # against KITTI car-speed distribution (~0.5 m/frame at 10 fps).
+    VELOCITY_SCALE_WORLD = 2.0
+
     def __init__(
         self,
         weights_path: str = None,
@@ -44,6 +49,8 @@ class GMCLinkManager:
         lang_dim: int = 384,
         frame_gap: int = 10,  # max gap for buffer sizing
         ego_router: "EgoRouter | str | None" = None,
+        use_depth: bool = False,
+        world_xy: bool = False,
     ) -> None:
         self.device = device
         self.frame_gap = frame_gap
@@ -55,6 +62,14 @@ class GMCLinkManager:
         self.extra_features: list = []
         motion_dim = 13
         self.temperature = 1.0
+        # CLIP-feat (Exp 39): ckpt meta drives aligner ctor + runtime extraction.
+        self.use_clip_feat = False
+        self.clip_feat_dim = 512
+        self.clip_proj_dim = 64
+        self.fusion_site = "input_concat"
+        self.lang_passthrough = False
+        self.app_proj_dim = 256
+        self.architecture = "mlp"
         checkpoint = None
         if weights_path:
             checkpoint = torch.load(weights_path, map_location=device)
@@ -62,10 +77,65 @@ class GMCLinkManager:
                 motion_dim = checkpoint.get("motion_dim", 13)
                 self.extra_features = checkpoint.get("extra_features") or []
                 self.temperature = checkpoint.get("temperature", 1.0)
+                ckpt_lang_dim = checkpoint.get("lang_dim")
+                if ckpt_lang_dim is not None:
+                    lang_dim = ckpt_lang_dim
+                ckpt_use_depth = checkpoint.get("use_depth")
+                if ckpt_use_depth is not None:
+                    use_depth = bool(ckpt_use_depth)
+                ckpt_world_xy = checkpoint.get("world_xy")
+                if ckpt_world_xy is not None:
+                    world_xy = bool(ckpt_world_xy)
+                self.use_clip_feat = bool(checkpoint.get("use_clip_feat", False))
+                self.clip_feat_dim = int(checkpoint.get("clip_feat_dim") or 512)
+                self.clip_proj_dim = int(checkpoint.get("clip_proj_dim") or 64)
+                self.fusion_site = str(checkpoint.get("fusion_site") or "input_concat")
+                self.lang_passthrough = bool(checkpoint.get("lang_passthrough", False))
+                self.app_proj_dim = int(checkpoint.get("app_proj_dim") or 256)
+                self.architecture = str(checkpoint.get("architecture") or "mlp")
+
+        # 17D depth path
+        self.use_depth = bool(use_depth)
+        if self.use_depth and motion_dim == 13:
+            motion_dim = 17
+        self.motion_dim = motion_dim
+
+        # World-XY projection: swap image dx/dy for metric world dX/dY
+        # via inverse pinhole `dX = dx_pixel * Z / f_x`. Same dim, drop-in.
+        self.world_xy = bool(world_xy)
+        if self.world_xy:
+            from gmc_link.camera_intrinsics import CameraIntrinsics
+            self.intrinsics = CameraIntrinsics()
+        else:
+            self.intrinsics = None
+        # per-track Z history: {track_id: [(frame_id, z_meters), ...]}
+        self._z_history: Dict[int, list] = {}
 
         self.aligner = MotionLanguageAligner(
-            motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256
+            motion_dim=motion_dim, lang_dim=lang_dim, embed_dim=256,
+            architecture=self.architecture,
+            use_clip_feat=self.use_clip_feat,
+            clip_feat_dim=self.clip_feat_dim,
+            clip_proj_dim=self.clip_proj_dim,
+            fusion_site=self.fusion_site,
+            lang_passthrough=self.lang_passthrough,
+            app_proj_dim=self.app_proj_dim,
         ).to(device)
+        # Lazy CLIP B/32 (DataComp-XL) for runtime bbox-crop encoding. Tracker
+        # bboxes are NOT in the GT-keyed train cache, must extract live.
+        self._clip_model = None
+        self._clip_preprocess = None
+        if self.use_clip_feat:
+            import open_clip
+            from PIL import Image as _PILImage
+            self._PILImage = _PILImage
+            m, _, pp = open_clip.create_model_and_transforms(
+                "ViT-B-32", pretrained="datacomp_xl_s13b_b90k"
+            )
+            self._clip_model = m.to(device).eval()
+            for p in self._clip_model.parameters():
+                p.requires_grad = False
+            self._clip_preprocess = pp
         if checkpoint is not None:
             if isinstance(checkpoint, dict) and "model" in checkpoint:
                 self.aligner.load_state_dict(checkpoint["model"])
@@ -96,6 +166,55 @@ class GMCLinkManager:
         # Background residual buffer for noise floor estimation
         self.bg_residual_buffer: deque = deque(maxlen=frame_gap + 1)
 
+    def encode_clip_image_bboxes(
+        self,
+        frame: np.ndarray,
+        bboxes_xyxy: List[Tuple[int, int, int, int]],
+    ) -> torch.Tensor:
+        """Run CLIP B/32 image encoder on bbox crops. Returns (N, clip_feat_dim) fp32.
+        Used by both process_frame (1-pass) and FH V2 builder (2-pass)."""
+        if not self.use_clip_feat or self._clip_model is None:
+            raise RuntimeError("encode_clip_image_bboxes requires use_clip_feat=True ckpt")
+        if not bboxes_xyxy:
+            return torch.empty(0, self.clip_feat_dim, device=self.device)
+        import cv2 as _cv2
+        img_h, img_w = frame.shape[:2]
+        crops = []
+        for (bx1, by1, bx2, by2) in bboxes_xyxy:
+            bx1i = int(max(0, min(img_w - 1, bx1)))
+            by1i = int(max(0, min(img_h - 1, by1)))
+            bx2i = int(max(bx1i + 1, min(img_w, bx2)))
+            by2i = int(max(by1i + 1, min(img_h, by2)))
+            crop_bgr = frame[by1i:by2i, bx1i:bx2i]
+            if crop_bgr.size == 0:
+                crop_bgr = np.zeros((2, 2, 3), dtype=np.uint8)
+            crop_rgb = _cv2.cvtColor(crop_bgr, _cv2.COLOR_BGR2RGB)
+            pil = self._PILImage.fromarray(crop_rgb)
+            crops.append(self._clip_preprocess(pil))
+        crop_batch = torch.stack(crops, dim=0).to(self.device)
+        with torch.no_grad():
+            feats = self._clip_model.encode_image(crop_batch)
+        return feats.float()
+
+    def _compute_dz_residual(
+        self,
+        z_now: Dict[int, float],
+        z_prev: Dict[int, float],
+        stationary_ids: set,
+    ) -> Dict[int, float]:
+        """Per-track dZ with ego-Z compensation.
+
+        dZ_ego = median(dZ) over stationary tracks; dZ_residual = dZ_track − dZ_ego.
+        Falls back to zero compensation if no stationary tracks.
+        """
+        dz_raw = {tid: z_now[tid] - z_prev[tid] for tid in z_now if tid in z_prev}
+        stat_dz = [dz_raw[tid] for tid in stationary_ids if tid in dz_raw]
+        if stat_dz:
+            dz_ego = float(np.median(stat_dz))
+        else:
+            dz_ego = 0.0
+        return {tid: v - dz_ego for tid, v in dz_raw.items()}
+
     def process_frame(
         self,
         frame: np.ndarray,
@@ -103,6 +222,11 @@ class GMCLinkManager:
         language_embedding: torch.Tensor,
         detections: Optional[np.ndarray] = None,
         update_state: bool = True,
+        raw_cos: bool = False,
+        depth_z_lookup: Optional[Dict[int, float]] = None,
+        seq: Optional[str] = None,
+        frame_id: Optional[int] = None,
+        clip_feat_cache: Optional[dict] = None,
     ) -> Tuple[Dict[int, float], Dict[int, np.ndarray], Dict[int, float]]:
         """
         Process a frame: compute centroid-difference velocities per tracked object,
@@ -114,9 +238,12 @@ class GMCLinkManager:
             language_embedding: (1, L_dim) Tensor representing the language prompt.
             detections: (N, 4) array of bounding boxes for ego-motion masking.
             update_state: Whether to update internal state (for multiple evaluations per frame)
+            raw_cos: If True, scores_dict returns raw cosine in [-1, +1] (no sigmoid, no EMA).
+                     For Arm B fusion experiments where downstream uses raw cosine directly.
 
         Returns:
-            scores_dict: {track_id: smoothed alignment score} (sigmoid, EMA-smoothed)
+            scores_dict: {track_id: alignment score} — if raw_cos=False (default), sigmoid+EMA
+                         smoothed [0,1]; if raw_cos=True, raw cosine [-1,+1] (no smoothing).
             velocities_dict: {track_id: 13D motion vector}
             cosine_dict: {track_id: EMA-smoothed cosine similarity} (raw cosine, asymmetric EMA)
         """
@@ -173,6 +300,12 @@ class GMCLinkManager:
 
         track_ids = []
         compensated_velocities = []
+        # CLIP path: collect bbox crops per appended track for batch encode after loop.
+        clip_bbox_xyxy: List[Tuple[int, int, int, int]] = []
+        # Depth path: collect per-track raw dZ-per-gap, defer ego-Z comp until after loop
+        per_track_z_now: Dict[int, float] = {}
+        per_track_dz_raw: Dict[int, Dict[int, float]] = {}
+        per_track_res_speed: Dict[int, float] = {}
 
         for track in active_tracks:
             if not hasattr(track, "centroid") or track.centroid is None:
@@ -274,6 +407,27 @@ class GMCLinkManager:
                  dw, dh, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
             )
 
+            # World-XY projection: swap image dx/dy for metric world dX/dY.
+            # Each smoothed slot s_norm = (pixel_dx / W) * VELOCITY_SCALE.
+            # Recover pixels (× W / VELOCITY_SCALE), project (× Z / f), re-normalize
+            # (× VELOCITY_SCALE_WORLD). Combined factor = (W/VELOCITY_SCALE)·(Z/f)·SCALE_WORLD.
+            # snr stays image-domain (slot 12) — bg + obj ratio coherent only in pixel space.
+            if self.world_xy and self.intrinsics is not None and seq is not None:
+                f_x, f_y, _, _ = self.intrinsics.get(seq)
+                z_raw = None
+                if depth_z_lookup is not None:
+                    z_raw = depth_z_lookup.get(tid)
+                z_eff = float(z_raw) if z_raw is not None else 30.0
+                z_eff = max(1.0, min(80.0, z_eff))
+                sx = (img_w / VELOCITY_SCALE) * z_eff / f_x * self.VELOCITY_SCALE_WORLD
+                sy = (img_h / VELOCITY_SCALE) * z_eff / f_y * self.VELOCITY_SCALE_WORLD
+                spatial_motion[0] *= sx  # dx_s
+                spatial_motion[1] *= sy  # dy_s
+                spatial_motion[2] *= sx  # dx_m
+                spatial_motion[3] *= sy  # dy_m
+                spatial_motion[4] *= sx  # dx_l
+                spatial_motion[5] *= sy  # dy_l
+
             if self.extra_features:
                 # Per-track (non-relational) extras only — manager has no neighbor context.
                 per_track_names = [
@@ -316,8 +470,74 @@ class GMCLinkManager:
                         [spatial_motion, np.array(extras, dtype=np.float32)]
                     )
 
+            # Depth path: collect raw dZ per gap & current Z (ego comp deferred)
+            if self.use_depth and depth_z_lookup is not None:
+                z_now = depth_z_lookup.get(tid)
+                per_track_z_now[tid] = z_now
+                per_track_res_speed[tid] = float(np.sqrt(dx_m ** 2 + dy_m ** 2))
+                if z_now is not None:
+                    hist = self._z_history.get(tid, [])
+                    z_at_gap: Dict[int, Optional[float]] = {g: None for g in self.FRAME_GAPS}
+                    for past_fid, past_z in reversed(hist):
+                        lag = self._frame_counter - past_fid
+                        for g in self.FRAME_GAPS:
+                            if z_at_gap[g] is None and lag >= g:
+                                z_at_gap[g] = past_z
+                    dz_raw_g: Dict[int, float] = {}
+                    for g in self.FRAME_GAPS:
+                        if z_at_gap[g] is not None:
+                            dz_raw_g[g] = z_now - z_at_gap[g]
+                    per_track_dz_raw[tid] = dz_raw_g
+                    if update_state:
+                        self._z_history.setdefault(tid, []).append((self._frame_counter, z_now))
+                        max_gap = max(self.FRAME_GAPS)
+                        self._z_history[tid] = [
+                            (f, z) for f, z in self._z_history[tid]
+                            if self._frame_counter - f <= max_gap + 1
+                        ]
+                else:
+                    per_track_dz_raw[tid] = {}
+
             track_ids.append(tid)
             compensated_velocities.append(spatial_motion)
+            if self.use_clip_feat:
+                if hasattr(track, "bbox") and track.bbox is not None:
+                    bx1, by1, bx2, by2 = track.bbox
+                    bx1i = int(max(0, min(img_w - 1, round(bx1))))
+                    by1i = int(max(0, min(img_h - 1, round(by1))))
+                    bx2i = int(max(bx1i + 1, min(img_w, round(bx2))))
+                    by2i = int(max(by1i + 1, min(img_h, round(by2))))
+                    clip_bbox_xyxy.append((bx1i, by1i, bx2i, by2i))
+                else:
+                    clip_bbox_xyxy.append((0, 0, 1, 1))
+
+        # Post-loop: ego-Z compensation per gap (cohort median over stationary tracks)
+        # Stationary criterion: residual mid-scale speed < 0.01 (≈1 px/frame at KITTI W=1242).
+        if self.use_depth and depth_z_lookup is not None:
+            stat_ids = {tid for tid, mag in per_track_res_speed.items() if mag < 0.01}
+            dz_ego_per_gap: Dict[int, float] = {}
+            for g in self.FRAME_GAPS:
+                stat_dz = [per_track_dz_raw[tid][g]
+                           for tid in stat_ids
+                           if tid in per_track_dz_raw and g in per_track_dz_raw[tid]]
+                dz_ego_per_gap[g] = float(np.median(stat_dz)) if stat_dz else 0.0
+            for i, tid in enumerate(track_ids):
+                z_now = per_track_z_now.get(tid)
+                if z_now is None:
+                    depth_4d = np.zeros(4, dtype=np.float32)
+                else:
+                    z_n = float(np.clip(z_now, 0.0, 80.0) / 100.0)
+                    dz_g = per_track_dz_raw.get(tid, {})
+                    dz_residual = []
+                    for g in self.FRAME_GAPS:
+                        if g in dz_g:
+                            dz_residual.append((dz_g[g] - dz_ego_per_gap[g]) / 10.0)
+                        else:
+                            dz_residual.append(0.0)
+                    depth_4d = np.array([z_n, *dz_residual], dtype=np.float32)
+                compensated_velocities[i] = np.concatenate(
+                    [compensated_velocities[i], depth_4d]
+                ).astype(np.float32)
 
         if not compensated_velocities:
             return {}, {}, {}
@@ -327,10 +547,33 @@ class GMCLinkManager:
             np.array(compensated_velocities), dtype=torch.float32
         ).to(self.device)
 
+        # Runtime CLIP B/32 forward on tracker bbox crops (Exp 39 path).
+        # CLIP features are expression-independent (same frame+boxes across exprs),
+        # so cache per frame_id when a shared cache is supplied — avoids re-encoding
+        # the identical crops once per expression.
+        clip_tensor = None
+        if self.use_clip_feat and self._clip_model is not None:
+            if clip_feat_cache is not None and frame_id is not None:
+                clip_tensor = clip_feat_cache.get(frame_id)
+                if clip_tensor is None:
+                    clip_tensor = self.encode_clip_image_bboxes(frame, clip_bbox_xyxy)
+                    clip_feat_cache[frame_id] = clip_tensor
+            else:
+                clip_tensor = self.encode_clip_image_bboxes(frame, clip_bbox_xyxy)
+
         with torch.no_grad():
             motion_emb, lang_emb = self.aligner.encode(
-                motion_tensor, language_embedding.to(self.device)
+                motion_tensor, language_embedding.to(self.device),
+                clip_feats=clip_tensor,
             )
+            # Case 2 fusion-transformer spike: stash per-track pre-cosine
+            # embeddings so callers can dump them without re-running aligner.
+            # Keyed by track_id; overwritten each frame.
+            self._last_motion_emb = {
+                int(tid): motion_emb[i].detach().cpu().numpy()
+                for i, tid in enumerate(track_ids)
+            }
+            self._last_lang_emb = lang_emb.detach().cpu().numpy()
             # Cosine similarity with margin calibration → sigmoid to [0, 1]
             # Margin shifts the sigmoid reference point so that zero-similarity
             # maps below 0.5, improving discrimination for stationary objects
@@ -352,7 +595,7 @@ class GMCLinkManager:
             else:
                 smoothed_score = self.score_buffer.peek(tid, raw_score)
                 smoothed_cosine = self.cosine_buffer.peek(tid, raw_cosine)
-            scores_dict[tid] = smoothed_score
+            scores_dict[tid] = raw_cosine if raw_cos else smoothed_score
             velocities_dict[tid] = compensated_velocities[i]
             cosine_dict[tid] = smoothed_cosine
 

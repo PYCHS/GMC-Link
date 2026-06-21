@@ -31,11 +31,14 @@ class AlignmentLoss(nn.Module):
             return 1.0 / self.log_inv_temp.exp().item()
         return self._init_temperature
 
-    def forward(self, sim_matrix, sentence_ids=None):
+    def forward(self, sim_matrix, sentence_ids=None, anchor_mask=None):
         """
         Args:
             sim_matrix:   (B, B) cosine similarity matrix from model.forward()
             sentence_ids: unused, kept for API compatibility
+            anchor_mask:  optional (B,) bool/float tensor — only masked anchors
+                          contribute to loss. Negatives stay full-batch (cross-class
+                          retention). Used by per-class specialist training.
 
         Returns:
             Scalar loss (mean of motion→language and language→motion directions)
@@ -51,11 +54,80 @@ class AlignmentLoss(nn.Module):
         # Targets: diagonal pairs are positives
         targets = torch.arange(B, device=device)
 
-        # Symmetric cross-entropy
-        m2l_loss = F.cross_entropy(logits, targets)
-        l2m_loss = F.cross_entropy(logits.t(), targets)
+        if anchor_mask is None:
+            m2l_loss = F.cross_entropy(logits, targets)
+            l2m_loss = F.cross_entropy(logits.t(), targets)
+            return (m2l_loss + l2m_loss) / 2.0
 
+        # Weighted CE: only target-class anchors contribute
+        w = anchor_mask.to(dtype=logits.dtype, device=device)
+        norm = w.sum().clamp_min(1.0)
+        m2l_per = F.cross_entropy(logits, targets, reduction="none")
+        l2m_per = F.cross_entropy(logits.t(), targets, reduction="none")
+        m2l_loss = (m2l_per * w).sum() / norm
+        l2m_loss = (l2m_per * w).sum() / norm
         return (m2l_loss + l2m_loss) / 2.0
+
+
+class StructuralConsensusLoss(nn.Module):
+    """Pairwise-distance (and optional triplet-angle) consensus between motion
+    and language embedding manifolds.
+
+    For L2-normalized embeddings z_m, z_l in (B, D):
+        L_dist  = MSE( D(z_m)/mean(D(z_m)), D(z_l)/mean(D(z_l)) )
+    where D = pairwise euclidean. Scale-normalized so the loss is invariant to
+    average inter-sample spread; only the *relative* geometry must match.
+
+    Triplet-angle term (optional, mode="dist_angle"):
+        For random anchor i with two neighbours j, k, match
+        cos((z_j - z_i),(z_k - z_i)) across modalities.
+    """
+
+    def __init__(self, lam_angle: float = 0.5, n_triplets: int = 1024,
+                 mode: str = "dist"):
+        super().__init__()
+        assert mode in ("dist", "dist_angle"), f"unknown mode={mode}"
+        self.lam_angle = lam_angle
+        self.n_triplets = n_triplets
+        self.mode = mode
+
+    @staticmethod
+    def _pairwise_mse(z_m, z_l):
+        D_m = torch.cdist(z_m, z_m, p=2)
+        D_l = torch.cdist(z_l, z_l, p=2)
+        D_m = D_m / D_m.mean().clamp_min(1e-8)
+        D_l = D_l / D_l.mean().clamp_min(1e-8)
+        return F.mse_loss(D_m, D_l)
+
+    def _triplet_angle_mse(self, z_m, z_l):
+        B = z_m.size(0)
+        if B < 3:
+            return z_m.new_zeros(())
+        device = z_m.device
+        idx = torch.randint(0, B, (self.n_triplets, 3), device=device)
+        i, j, k = idx[:, 0], idx[:, 1], idx[:, 2]
+        same = (i == j) | (i == k) | (j == k)
+        keep = ~same
+        if keep.sum() == 0:
+            return z_m.new_zeros(())
+        i, j, k = i[keep], j[keep], k[keep]
+        v_mj = F.normalize(z_m[j] - z_m[i], dim=-1, eps=1e-8)
+        v_mk = F.normalize(z_m[k] - z_m[i], dim=-1, eps=1e-8)
+        v_lj = F.normalize(z_l[j] - z_l[i], dim=-1, eps=1e-8)
+        v_lk = F.normalize(z_l[k] - z_l[i], dim=-1, eps=1e-8)
+        cos_m = (v_mj * v_mk).sum(-1)
+        cos_l = (v_lj * v_lk).sum(-1)
+        return F.mse_loss(cos_m, cos_l)
+
+    def forward(self, z_m, z_l):
+        """Args:
+            z_m, z_l: (B, D) L2-normalized cross-modal embeddings.
+        Returns scalar loss.
+        """
+        L = self._pairwise_mse(z_m, z_l)
+        if self.mode == "dist_angle":
+            L = L + self.lam_angle * self._triplet_angle_mse(z_m, z_l)
+        return L
 
 
 class HardNegativeInfoNCE(nn.Module):
@@ -103,7 +175,7 @@ class HardNegativeInfoNCE(nn.Module):
         w = log_w.exp().masked_fill(~negative_mask, 0.0)
         return w, n_neg.long()
 
-    def forward(self, sim_matrix, sentence_ids=None):
+    def forward(self, sim_matrix, sentence_ids=None, anchor_mask=None):
         if self.fnm and sentence_ids is None:
             raise ValueError("sentence_ids is required when fnm=True")
         B = sim_matrix.size(0)
@@ -143,6 +215,14 @@ class HardNegativeInfoNCE(nn.Module):
         den_m2l = torch.logsumexp(torch.stack([pos_logits, neg_lse_m2l], dim=1), dim=1)
         den_l2m = torch.logsumexp(torch.stack([pos_logits, neg_lse_l2m], dim=1), dim=1)
 
-        l_m2l = (den_m2l - pos_logits).mean()
-        l_l2m = (den_l2m - pos_logits).mean()
+        per_m2l = den_m2l - pos_logits  # (B,)
+        per_l2m = den_l2m - pos_logits  # (B,)
+
+        if anchor_mask is None:
+            return (per_m2l.mean() + per_l2m.mean()) / 2.0
+
+        w = anchor_mask.to(dtype=per_m2l.dtype, device=device)
+        norm = w.sum().clamp_min(1.0)
+        l_m2l = (per_m2l * w).sum() / norm
+        l_l2m = (per_l2m * w).sum() / norm
         return (l_m2l + l_l2m) / 2.0

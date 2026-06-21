@@ -1,0 +1,60 @@
+{
+  "iou_thr": 0.5,
+  "per_cell": {
+    "0005/car": {
+      "ns_boxes": 1156,
+      "gdino_boxes": 864,
+      "matched_ns": 656,
+      "recall": 0.5674740484429066,
+      "new_gd": 208,
+      "new_ratio": 0.24074074074074073,
+      "verdict": "FAIL"
+    },
+    "0005/pedestrian": {
+      "ns_boxes": 0,
+      "gdino_boxes": 413,
+      "matched_ns": 0,
+      "recall": NaN,
+      "new_gd": 413,
+      "new_ratio": 1.0,
+      "verdict": "PASS"
+    },
+    "0011/car": {
+      "ns_boxes": 2818,
+      "gdino_boxes": 1932,
+      "matched_ns": 1412,
+      "recall": 0.5010645848119234,
+      "new_gd": 520,
+      "new_ratio": 0.2691511387163561,
+      "verdict": "FAIL"
+    },
+    "0011/pedestrian": {
+      "ns_boxes": 55,
+      "gdino_boxes": 625,
+      "matched_ns": 38,
+      "recall": 0.6909090909090909,
+      "new_gd": 587,
+      "new_ratio": 0.9392,
+      "verdict": "FAIL"
+    },
+    "0013/car": {
+      "ns_boxes": 40,
+      "gdino_boxes": 413,
+      "matched_ns": 30,
+      "recall": 0.75,
+      "new_gd": 383,
+      "new_ratio": 0.927360774818402,
+      "verdict": "FAIL"
+    },
+    "0013/pedestrian": {
+      "ns_boxes": 881,
+      "gdino_boxes": 3249,
+      "matched_ns": 551,
+      "recall": 0.6254256526674233,
+      "new_gd": 2698,
+      "new_ratio": 0.8304093567251462,
+      "verdict": "FAIL"
+    }
+  },
+  "overall_pass": false
+}
