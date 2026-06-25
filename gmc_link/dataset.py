@@ -67,8 +67,9 @@ def _omf_cache_reset():
     _load_omf_field.cache_clear()
     _load_orb_grid_field.cache_clear()
 
-# Multi-scale frame gaps for temporal velocity features
-FRAME_GAPS = [2, 5, 10]  # short, mid, long
+# Multi-scale frame gaps for temporal velocity features.
+# GMC_GAPS env overrides for the -multiscale ablation (must match manager.py).
+FRAME_GAPS = [int(g) for g in os.environ.get("GMC_GAPS", "2,5,10").split(",")]  # short, mid, long
 
 # Lazy CameraIntrinsics singleton for world-XY projection. Built on first
 # world_xy=True call to avoid import cost on the legacy path.
@@ -117,6 +118,12 @@ def _build_cache_key(
         key_obj["use_depth"] = True
     if world_xy:
         key_obj["world_xy"] = True
+    # Ablation env (only added when set, so ship caches keep their historic hash).
+    # frame_gaps already covers the -multiscale (GMC_GAPS) ablation.
+    if os.environ.get("GMC_RAWVEL") == "1":
+        key_obj["rawvel"] = True
+    if os.environ.get("GMC_NO_SNR") == "1":
+        key_obj["no_snr"] = "zeroed13d"  # v2: zero slot, keep 13D (busts stale 12D cache)
     # NB: class_filter intentionally NOT in cache key. Anchor-mask mode keeps
     # the full motion-filtered pool; only the loss anchor_mask depends on it.
     # Same cached (motion, lang, labels, id_to_class) serves all class_filter values.
@@ -1050,9 +1057,13 @@ def _compute_velocity_at_gap(
         ego_dx = (warped[0] - cx1) / w * VELOCITY_SCALE
         ego_dy = (warped[1] - cy1) / h * VELOCITY_SCALE
 
-    # Residual = raw - ego (object-only motion)
-    res_dx = raw_dx - ego_dx
-    res_dy = raw_dy - ego_dy
+    # Residual = raw - ego (object-only motion).
+    # GMC_RAWVEL=1 ablation: keep raw velocity (no ego compensation); must match manager.py.
+    if os.environ.get("GMC_RAWVEL") == "1":
+        res_dx, res_dy = raw_dx, raw_dy
+    else:
+        res_dx = raw_dx - ego_dx
+        res_dy = raw_dy - ego_dy
 
     return res_dx, res_dy, bg_residual, ego_dx, ego_dy
 
@@ -1311,12 +1322,13 @@ def _generate_positive_pairs(
                 sy = (h / VELOCITY_SCALE) * z_eff / f_y * 2.0
                 scale_velocities = [(dx * sx, dy * sy) for dx, dy in scale_velocities]
 
-            # Base 13D vector
+            # Base 13D vector; -snr ablation zeroes the snr slot (must match manager.py).
+            _snr = 0.0 if os.environ.get("GMC_NO_SNR") == "1" else snr
             base_vec = [
                 scale_velocities[0][0], scale_velocities[0][1],
                 scale_velocities[1][0], scale_velocities[1][1],
                 scale_velocities[2][0], scale_velocities[2][1],
-                dw, dh, cx_n, cy_n, bw_n, bh_n, snr,
+                dw, dh, cx_n, cy_n, bw_n, bh_n, _snr,
             ]
 
             # Depth-augmentation 4D: [Z_n, dZ_res_short, dZ_res_mid, dZ_res_long].

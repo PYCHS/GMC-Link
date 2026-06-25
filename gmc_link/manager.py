@@ -6,6 +6,7 @@ and debugging capabilities.
 """
 from typing import Dict, List, Tuple, Any, Optional
 from collections import deque
+import os
 import torch
 import numpy as np
 
@@ -34,8 +35,9 @@ class GMCLinkManager:
     This provides better numerical stability and debugging capabilities.
     """
 
-    # Multi-scale frame gaps matching training
-    FRAME_GAPS = [2, 5, 10]  # short, mid, long
+    # Multi-scale frame gaps matching training. GMC_GAPS env overrides for the
+    # -multiscale ablation (e.g. GMC_GAPS=5,5,5 collapses to a single gap, 13D kept).
+    FRAME_GAPS = [int(g) for g in os.environ.get("GMC_GAPS", "2,5,10").split(",")]  # short, mid, long
 
     # World-XY projection scale: tunes 95th-percentile world dX/dY input to ~1.0
     # so MLP inputs sit near unit magnitude after Z/f projection. Calibrated
@@ -355,8 +357,12 @@ class GMCLinkManager:
                         H_old = homographies[T - 1 - gap]
                         warped_old = warp_points(np.array([old_c]), H_old)[0]
                         ego_v = normalize_velocity(warped_old - old_c, frame_shape)
-                        # Residual = raw - ego (object-only motion)
-                        residual_velocities.append(v_norm - ego_v)
+                        # Residual = raw - ego (object-only motion).
+                        # GMC_RAWVEL=1 ablation: keep raw velocity (no ego compensation).
+                        if os.environ.get("GMC_RAWVEL") == "1":
+                            residual_velocities.append(v_norm)
+                        else:
+                            residual_velocities.append(v_norm - ego_v)
                     else:
                         residual_velocities.append(np.zeros(2, dtype=np.float32))
 
@@ -402,10 +408,11 @@ class GMCLinkManager:
             obj_speed = np.sqrt(dx_m ** 2 + dy_m ** 2)
             snr = obj_speed / (bg_magnitude + 1e-6)
 
-            spatial_motion = np.array(
-                [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l,
-                 dw, dh, cx_n, cy_n, w_n, h_n, snr], dtype=np.float32
-            )
+            # -snr ablation zeroes the snr slot (keeps 13D arch; removes the signal).
+            _snr = 0.0 if os.environ.get("GMC_NO_SNR") == "1" else snr
+            _motion_list = [dx_s, dy_s, dx_m, dy_m, dx_l, dy_l,
+                            dw, dh, cx_n, cy_n, w_n, h_n, _snr]
+            spatial_motion = np.array(_motion_list, dtype=np.float32)
 
             # World-XY projection: swap image dx/dy for metric world dX/dY.
             # Each smoothed slot s_norm = (pixel_dx / W) * VELOCITY_SCALE.
