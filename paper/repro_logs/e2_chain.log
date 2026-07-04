@@ -1,0 +1,70 @@
+=== TRAIN arm-env='' seed=4 -> gmc_link_weights_v1train_sharedweight_seed4.pth ===
+Epoch [100/100] | Loss: 4.0114 | Acc: 64.62% | LR: 0.000010
+Training complete. Weights saved to gmc_link_weights_v1train_sharedweight_seed4.pth (τ=0.0700)
+=== TRAIN arm-env='GMC_RAWVEL=1' seed=3 -> gmc_w_noego_seed3.pth ===
+Epoch [100/100] | Loss: 4.0189 | Acc: 64.23% | LR: 0.000010
+Training complete. Weights saved to gmc_w_noego_seed3.pth (τ=0.0700)
+=== TRAIN arm-env='GMC_RAWVEL=1' seed=4 -> gmc_w_noego_seed4.pth ===
+Epoch [100/100] | Loss: 4.0110 | Acc: 64.54% | LR: 0.000010
+Training complete. Weights saved to gmc_w_noego_seed4.pth (τ=0.0700)
+=== TRAIN arm-env='GMC_GAPS=5,5,5' seed=3 -> gmc_w_singlegap_seed3.pth ===
+Epoch [100/100] | Loss: 4.0525 | Acc: 62.90% | LR: 0.000010
+Training complete. Weights saved to gmc_w_singlegap_seed3.pth (τ=0.0700)
+=== TRAIN arm-env='GMC_GAPS=5,5,5' seed=4 -> gmc_w_singlegap_seed4.pth ===
+Epoch [100/100] | Loss: 4.0431 | Acc: 63.44% | LR: 0.000010
+Training complete. Weights saved to gmc_w_singlegap_seed4.pth (τ=0.0700)
+=== TRAIN arm-env='GMC_NO_SNR=1' seed=3 -> gmc_w_nosnr_seed3.pth ===
+Epoch [100/100] | Loss: 4.0162 | Acc: 63.76% | LR: 0.000010
+Training complete. Weights saved to gmc_w_nosnr_seed3.pth (τ=0.0700)
+=== TRAIN arm-env='GMC_NO_SNR=1' seed=4 -> gmc_w_nosnr_seed4.pth ===
+Epoch [100/100] | Loss: 4.0119 | Acc: 64.24% | LR: 0.000010
+Training complete. Weights saved to gmc_w_nosnr_seed4.pth (τ=0.0700)
+=== CACHE _sharedweight_seed3_rawcos 0005 ===
+=== CACHE _sharedweight_seed3_rawcos 0011 ===
+=== CACHE _sharedweight_seed3_rawcos 0013 ===
+=== CACHE _noego_seed3_rawcos 0005 ===
+=== CACHE _noego_seed3_rawcos 0011 ===
+=== CACHE _noego_seed3_rawcos 0013 ===
+=== CACHE _singlegap_seed3_rawcos 0005 ===
+=== CACHE _singlegap_seed3_rawcos 0011 ===
+=== CACHE _singlegap_seed3_rawcos 0013 ===
+=== CACHE _nosnr_seed3_rawcos 0005 ===
+=== CACHE _nosnr_seed3_rawcos 0011 ===
+=== CACHE _nosnr_seed3_rawcos 0013 ===
+=== CACHE _sharedweight_seed4_rawcos 0005 ===
+=== CACHE _sharedweight_seed4_rawcos 0011 ===
+=== CACHE _sharedweight_seed4_rawcos 0013 ===
+=== CACHE _noego_seed4_rawcos 0005 ===
+=== CACHE _noego_seed4_rawcos 0011 ===
+=== CACHE _noego_seed4_rawcos 0013 ===
+=== CACHE _singlegap_seed4_rawcos 0005 ===
+=== CACHE _singlegap_seed4_rawcos 0011 ===
+=== CACHE _singlegap_seed4_rawcos 0013 ===
+=== CACHE _nosnr_seed4_rawcos 0005 ===
+=== CACHE _nosnr_seed4_rawcos 0011 ===
+=== CACHE _nosnr_seed4_rawcos 0013 ===
+=== EVAL _sharedweight_seed3 ===
+  pooled=44.379  APPEAR=46.616  MOVING=28.619  STATIC=43.314
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+=== EVAL _noego_seed3 ===
+  pooled=43.721  APPEAR=46.733  MOVING=26.142  STATIC=40.523
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+=== EVAL _singlegap_seed3 ===
+  pooled=44.375  APPEAR=46.554  MOVING=28.613  STATIC=43.482
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+=== EVAL _nosnr_seed3 ===
+  pooled=44.516  APPEAR=46.618  MOVING=29.294  STATIC=43.307
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+=== EVAL _sharedweight_seed4 ===
+  pooled=44.311  APPEAR=46.603  MOVING=28.365  STATIC=42.92
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+=== EVAL _noego_seed4 ===
+  pooled=43.994  APPEAR=46.693  MOVING=27.608  STATIC=41.455
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+=== EVAL _singlegap_seed4 ===
+  pooled=44.549  APPEAR=46.804  MOVING=28.771  STATIC=43.495
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+=== EVAL _nosnr_seed4 ===
+  pooled=44.508  APPEAR=46.509  MOVING=29.798  STATIC=43.755
+tag                       α_m  sc_m  thr_m  α_a  sc_a  thr_a  pooled   APPEAR   MOVING   STATIC
+E2 CHAIN DONE

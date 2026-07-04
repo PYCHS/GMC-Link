@@ -1,0 +1,24 @@
+=== EVAL _sharedweight_seed0 ===
+  pooled=44.561  APPEAR=46.819  MOVING=28.885  STATIC=43.24
+=== EVAL _noego_seed0 ===
+  pooled=43.95  APPEAR=46.733  MOVING=27.661  STATIC=41.172
+=== EVAL _singlegap_seed0 ===
+  pooled=44.431  APPEAR=46.543  MOVING=30.182  STATIC=43.472
+=== EVAL _nosnr_seed0 ===
+  pooled=44.449  APPEAR=46.694  MOVING=29.021  STATIC=43.105
+=== EVAL _sharedweight_seed1 ===
+  pooled=44.513  APPEAR=46.607  MOVING=29.037  STATIC=43.636
+=== EVAL _noego_seed1 ===
+  pooled=44.024  APPEAR=46.755  MOVING=27.665  STATIC=41.492
+=== EVAL _singlegap_seed1 ===
+  pooled=44.389  APPEAR=46.77  MOVING=27.87  STATIC=43.392
+=== EVAL _nosnr_seed1 ===
+  pooled=44.68  APPEAR=46.818  MOVING=30.15  STATIC=42.939
+=== EVAL _sharedweight_seed2 ===
+  pooled=44.667  APPEAR=46.754  MOVING=30.483  STATIC=43.184
+=== EVAL _noego_seed2 ===
+  pooled=43.868  APPEAR=46.645  MOVING=27.457  STATIC=41.316
+=== EVAL _singlegap_seed2 ===
+  pooled=44.385  APPEAR=46.692  MOVING=28.679  STATIC=43.249
+=== EVAL _nosnr_seed2 ===
+  pooled=44.714  APPEAR=46.752  MOVING=30.452  STATIC=43.648
