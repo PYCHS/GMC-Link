@@ -1,0 +1,284 @@
+Loading run_flexhook_phase5_gmc_sweep inputs (result_0.json ~80MB)...
+[v1 seed0] motion sc=3.0 thr=1.5 fit(no 0005)=51.102 fit(no 0011)=52.897 fit(no 0013)=55.656
+[v1 seed0] motion sc=3.0 thr=3.0 fit(no 0005)=51.047 fit(no 0011)=53.03 fit(no 0013)=55.74
+[v1 seed0] motion sc=3.0 thr=4.5 fit(no 0005)=50.742 fit(no 0011)=53.059 fit(no 0013)=55.642
+[v1 seed0] motion sc=5.0 thr=1.5 fit(no 0005)=51.202 fit(no 0011)=52.87 fit(no 0013)=55.719
+[v1 seed0] motion sc=5.0 thr=3.0 fit(no 0005)=51.211 fit(no 0011)=53.068 fit(no 0013)=55.812
+[v1 seed0] motion sc=5.0 thr=4.5 fit(no 0005)=50.91 fit(no 0011)=53.046 fit(no 0013)=55.69
+[v1 seed0] motion sc=6.5 thr=1.5 fit(no 0005)=51.259 fit(no 0011)=52.837 fit(no 0013)=55.746
+[v1 seed0] motion sc=6.5 thr=3.0 fit(no 0005)=51.305 fit(no 0011)=53.092 fit(no 0013)=55.846
+[v1 seed0] motion sc=6.5 thr=4.5 fit(no 0005)=50.972 fit(no 0011)=53.029 fit(no 0013)=55.702
+[v1 seed0] motion sc=8.0 thr=1.5 fit(no 0005)=51.282 fit(no 0011)=52.791 fit(no 0013)=55.767
+[v1 seed0] motion sc=8.0 thr=3.0 fit(no 0005)=51.352 fit(no 0011)=53.057 fit(no 0013)=55.867
+[v1 seed0] motion sc=8.0 thr=4.5 fit(no 0005)=51.029 fit(no 0011)=52.998 fit(no 0013)=55.714
+[v1 seed0] motion sc=10.0 thr=1.5 fit(no 0005)=51.322 fit(no 0011)=52.768 fit(no 0013)=55.785
+[v1 seed0] motion sc=10.0 thr=3.0 fit(no 0005)=51.394 fit(no 0011)=53.003 fit(no 0013)=55.889
+[v1 seed0] motion sc=10.0 thr=4.5 fit(no 0005)=51.127 fit(no 0011)=53.008 fit(no 0013)=55.733
+[v1 seed0] fold-best motion: {'0005': (10.0, 3.0), '0011': (6.5, 3.0), '0013': (10.0, 3.0)}
+[v1 seed0] appear sc=1.75 thr=0.45 @motion(6.5, 3.0) fit(no 0011)=53.187
+[v1 seed0] appear sc=1.75 thr=0.9 @motion(6.5, 3.0) fit(no 0011)=53.055
+[v1 seed0] appear sc=1.75 thr=1.35 @motion(6.5, 3.0) fit(no 0011)=52.954
+[v1 seed0] appear sc=3.5 thr=0.45 @motion(6.5, 3.0) fit(no 0011)=53.362
+[v1 seed0] appear sc=3.5 thr=0.9 @motion(6.5, 3.0) fit(no 0011)=53.227
+[v1 seed0] appear sc=3.5 thr=1.35 @motion(6.5, 3.0) fit(no 0011)=53.12
+[v1 seed0] appear sc=5.25 thr=0.45 @motion(6.5, 3.0) fit(no 0011)=53.468
+[v1 seed0] appear sc=5.25 thr=0.9 @motion(6.5, 3.0) fit(no 0011)=53.409
+[v1 seed0] appear sc=5.25 thr=1.35 @motion(6.5, 3.0) fit(no 0011)=53.336
+[v1 seed0] appear sc=1.75 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.479 fit(no 0013)=55.851
+[v1 seed0] appear sc=1.75 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.392 fit(no 0013)=55.821
+[v1 seed0] appear sc=1.75 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.293 fit(no 0013)=55.736
+[v1 seed0] appear sc=3.5 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.558 fit(no 0013)=55.837
+[v1 seed0] appear sc=3.5 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.446 fit(no 0013)=55.767
+[v1 seed0] appear sc=3.5 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.337 fit(no 0013)=55.694
+[v1 seed0] appear sc=5.25 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.568 fit(no 0013)=55.772
+[v1 seed0] appear sc=5.25 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.514 fit(no 0013)=55.731
+[v1 seed0] appear sc=5.25 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.394 fit(no 0013)=55.629
+[v1 seed0] HELD-OUT 0005: motion(sc=10.0,thr=3.0) appear(sc=5.25,thr=0.45) pooled=60.844 moving=63.707
+[v1 seed0] HELD-OUT 0011: motion(sc=6.5,thr=3.0) appear(sc=5.25,thr=0.45) pooled=53.664 moving=27.174
+[v1 seed0] HELD-OUT 0013: motion(sc=10.0,thr=3.0) appear(sc=1.75,thr=0.45) pooled=44.231 moving=44.84
+[v1 seed0] LOSO pooled=53.448 moving=45.508 (375s)
+[v1 seed1] motion sc=3.0 thr=1.5 fit(no 0005)=51.044 fit(no 0011)=52.85 fit(no 0013)=55.618
+[v1 seed1] motion sc=3.0 thr=3.0 fit(no 0005)=51.025 fit(no 0011)=52.978 fit(no 0013)=55.707
+[v1 seed1] motion sc=3.0 thr=4.5 fit(no 0005)=50.674 fit(no 0011)=52.875 fit(no 0013)=55.59
+[v1 seed1] motion sc=5.0 thr=1.5 fit(no 0005)=51.127 fit(no 0011)=52.787 fit(no 0013)=55.668
+[v1 seed1] motion sc=5.0 thr=3.0 fit(no 0005)=51.128 fit(no 0011)=52.908 fit(no 0013)=55.732
+[v1 seed1] motion sc=5.0 thr=4.5 fit(no 0005)=50.752 fit(no 0011)=52.733 fit(no 0013)=55.561
+[v1 seed1] motion sc=6.5 thr=1.5 fit(no 0005)=51.196 fit(no 0011)=52.727 fit(no 0013)=55.693
+[v1 seed1] motion sc=6.5 thr=3.0 fit(no 0005)=51.182 fit(no 0011)=52.852 fit(no 0013)=55.714
+[v1 seed1] motion sc=6.5 thr=4.5 fit(no 0005)=50.792 fit(no 0011)=52.654 fit(no 0013)=55.548
+[v1 seed1] motion sc=8.0 thr=1.5 fit(no 0005)=51.226 fit(no 0011)=52.684 fit(no 0013)=55.706
+[v1 seed1] motion sc=8.0 thr=3.0 fit(no 0005)=51.258 fit(no 0011)=52.755 fit(no 0013)=55.741
+[v1 seed1] motion sc=8.0 thr=4.5 fit(no 0005)=50.851 fit(no 0011)=52.613 fit(no 0013)=55.536
+[v1 seed1] motion sc=10.0 thr=1.5 fit(no 0005)=51.266 fit(no 0011)=52.589 fit(no 0013)=55.692
+[v1 seed1] motion sc=10.0 thr=3.0 fit(no 0005)=51.332 fit(no 0011)=52.647 fit(no 0013)=55.776
+[v1 seed1] motion sc=10.0 thr=4.5 fit(no 0005)=50.891 fit(no 0011)=52.61 fit(no 0013)=55.498
+[v1 seed1] fold-best motion: {'0005': (10.0, 3.0), '0011': (3.0, 3.0), '0013': (10.0, 3.0)}
+[v1 seed1] appear sc=1.75 thr=0.45 @motion(3.0, 3.0) fit(no 0011)=53.003
+[v1 seed1] appear sc=1.75 thr=0.9 @motion(3.0, 3.0) fit(no 0011)=52.906
+[v1 seed1] appear sc=1.75 thr=1.35 @motion(3.0, 3.0) fit(no 0011)=52.77
+[v1 seed1] appear sc=3.5 thr=0.45 @motion(3.0, 3.0) fit(no 0011)=53.081
+[v1 seed1] appear sc=3.5 thr=0.9 @motion(3.0, 3.0) fit(no 0011)=52.99
+[v1 seed1] appear sc=3.5 thr=1.35 @motion(3.0, 3.0) fit(no 0011)=52.91
+[v1 seed1] appear sc=5.25 thr=0.45 @motion(3.0, 3.0) fit(no 0011)=53.143
+[v1 seed1] appear sc=5.25 thr=0.9 @motion(3.0, 3.0) fit(no 0011)=53.07
+[v1 seed1] appear sc=5.25 thr=1.35 @motion(3.0, 3.0) fit(no 0011)=52.998
+[v1 seed1] appear sc=1.75 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.339 fit(no 0013)=55.732
+[v1 seed1] appear sc=1.75 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.28 fit(no 0013)=55.703
+[v1 seed1] appear sc=1.75 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.178 fit(no 0013)=55.645
+[v1 seed1] appear sc=3.5 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.34 fit(no 0013)=55.701
+[v1 seed1] appear sc=3.5 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.272 fit(no 0013)=55.68
+[v1 seed1] appear sc=3.5 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.182 fit(no 0013)=55.603
+[v1 seed1] appear sc=5.25 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.32 fit(no 0013)=55.664
+[v1 seed1] appear sc=5.25 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.242 fit(no 0013)=55.6
+[v1 seed1] appear sc=5.25 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.169 fit(no 0013)=55.559
+[v1 seed1] HELD-OUT 0005: motion(sc=10.0,thr=3.0) appear(sc=3.5,thr=0.45) pooled=60.545 moving=60.239
+[v1 seed1] HELD-OUT 0011: motion(sc=3.0,thr=3.0) appear(sc=5.25,thr=0.45) pooled=53.378 moving=22.909
+[v1 seed1] HELD-OUT 0013: motion(sc=10.0,thr=3.0) appear(sc=1.75,thr=0.45) pooled=43.676 moving=43.595
+[v1 seed1] LOSO pooled=53.113 moving=43.117 (373s)
+[v1 seed2] motion sc=3.0 thr=1.5 fit(no 0005)=51.107 fit(no 0011)=52.911 fit(no 0013)=55.651
+[v1 seed2] motion sc=3.0 thr=3.0 fit(no 0005)=51.076 fit(no 0011)=53.071 fit(no 0013)=55.74
+[v1 seed2] motion sc=3.0 thr=4.5 fit(no 0005)=50.724 fit(no 0011)=52.996 fit(no 0013)=55.606
+[v1 seed2] motion sc=5.0 thr=1.5 fit(no 0005)=51.226 fit(no 0011)=52.912 fit(no 0013)=55.707
+[v1 seed2] motion sc=5.0 thr=3.0 fit(no 0005)=51.209 fit(no 0011)=53.036 fit(no 0013)=55.805
+[v1 seed2] motion sc=5.0 thr=4.5 fit(no 0005)=50.911 fit(no 0011)=53.086 fit(no 0013)=55.626
+[v1 seed2] motion sc=6.5 thr=1.5 fit(no 0005)=51.296 fit(no 0011)=52.872 fit(no 0013)=55.741
+[v1 seed2] motion sc=6.5 thr=3.0 fit(no 0005)=51.269 fit(no 0011)=53.03 fit(no 0013)=55.824
+[v1 seed2] motion sc=6.5 thr=4.5 fit(no 0005)=50.997 fit(no 0011)=53.09 fit(no 0013)=55.641
+[v1 seed2] motion sc=8.0 thr=1.5 fit(no 0005)=51.333 fit(no 0011)=52.833 fit(no 0013)=55.76
+[v1 seed2] motion sc=8.0 thr=3.0 fit(no 0005)=51.325 fit(no 0011)=53.015 fit(no 0013)=55.831
+[v1 seed2] motion sc=8.0 thr=4.5 fit(no 0005)=51.054 fit(no 0011)=53.055 fit(no 0013)=55.637
+[v1 seed2] motion sc=10.0 thr=1.5 fit(no 0005)=51.363 fit(no 0011)=52.79 fit(no 0013)=55.783
+[v1 seed2] motion sc=10.0 thr=3.0 fit(no 0005)=51.388 fit(no 0011)=52.95 fit(no 0013)=55.829
+[v1 seed2] motion sc=10.0 thr=4.5 fit(no 0005)=51.121 fit(no 0011)=53.017 fit(no 0013)=55.635
+[v1 seed2] fold-best motion: {'0005': (10.0, 3.0), '0011': (6.5, 4.5), '0013': (8.0, 3.0)}
+[v1 seed2] appear sc=1.75 thr=0.45 @motion(8.0, 3.0) fit(no 0013)=55.811
+[v1 seed2] appear sc=1.75 thr=0.9 @motion(8.0, 3.0) fit(no 0013)=55.774
+[v1 seed2] appear sc=1.75 thr=1.35 @motion(8.0, 3.0) fit(no 0013)=55.708
+[v1 seed2] appear sc=3.5 thr=0.45 @motion(8.0, 3.0) fit(no 0013)=55.787
+[v1 seed2] appear sc=3.5 thr=0.9 @motion(8.0, 3.0) fit(no 0013)=55.771
+[v1 seed2] appear sc=3.5 thr=1.35 @motion(8.0, 3.0) fit(no 0013)=55.698
+[v1 seed2] appear sc=5.25 thr=0.45 @motion(8.0, 3.0) fit(no 0013)=55.769
+[v1 seed2] appear sc=5.25 thr=0.9 @motion(8.0, 3.0) fit(no 0013)=55.729
+[v1 seed2] appear sc=5.25 thr=1.35 @motion(8.0, 3.0) fit(no 0013)=55.672
+[v1 seed2] appear sc=1.75 thr=0.45 @motion(6.5, 4.5) fit(no 0011)=53.218
+[v1 seed2] appear sc=1.75 thr=0.9 @motion(6.5, 4.5) fit(no 0011)=53.1
+[v1 seed2] appear sc=1.75 thr=1.35 @motion(6.5, 4.5) fit(no 0011)=53.007
+[v1 seed2] appear sc=3.5 thr=0.45 @motion(6.5, 4.5) fit(no 0011)=53.424
+[v1 seed2] appear sc=3.5 thr=0.9 @motion(6.5, 4.5) fit(no 0011)=53.334
+[v1 seed2] appear sc=3.5 thr=1.35 @motion(6.5, 4.5) fit(no 0011)=53.227
+[v1 seed2] appear sc=5.25 thr=0.45 @motion(6.5, 4.5) fit(no 0011)=53.572
+[v1 seed2] appear sc=5.25 thr=0.9 @motion(6.5, 4.5) fit(no 0011)=53.506
+[v1 seed2] appear sc=5.25 thr=1.35 @motion(6.5, 4.5) fit(no 0011)=53.448
+[v1 seed2] appear sc=1.75 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.468
+[v1 seed2] appear sc=1.75 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.421
+[v1 seed2] appear sc=1.75 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.342
+[v1 seed2] appear sc=3.5 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.567
+[v1 seed2] appear sc=3.5 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.526
+[v1 seed2] appear sc=3.5 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.405
+[v1 seed2] appear sc=5.25 thr=0.45 @motion(10.0, 3.0) fit(no 0005)=51.639
+[v1 seed2] appear sc=5.25 thr=0.9 @motion(10.0, 3.0) fit(no 0005)=51.58
+[v1 seed2] appear sc=5.25 thr=1.35 @motion(10.0, 3.0) fit(no 0005)=51.497
+[v1 seed2] HELD-OUT 0005: motion(sc=10.0,thr=3.0) appear(sc=5.25,thr=0.45) pooled=60.769 moving=63.518
+[v1 seed2] HELD-OUT 0011: motion(sc=6.5,thr=4.5) appear(sc=5.25,thr=0.45) pooled=53.376 moving=22.397
+[v1 seed2] HELD-OUT 0013: motion(sc=8.0,thr=3.0) appear(sc=1.75,thr=0.45) pooled=44.19 moving=44.803
+[v1 seed2] LOSO pooled=53.267 moving=45.086 (374s)
+
+Wrote /home/seanachan/GMC-Link/hota_eval_loso_flexhook_v1/loso_results.json
+LOSO pooled HOTA n=3: 53.276 +- 0.168 (in-sample ship 53.526 +- 0.087)
+Loading run_flexhook_v2_raw_sweep inputs (result_0.json ~80MB)...
+[v2 seed0] motion sc=2.0 thr=0.65 fit(no 0005)=41.235 fit(no 0011)=40.495 fit(no 0013)=42.757 fit(no 0019)=50.792
+[v2 seed0] motion sc=2.0 thr=1.3 fit(no 0005)=41.239 fit(no 0011)=40.533 fit(no 0013)=42.755 fit(no 0019)=50.824
+[v2 seed0] motion sc=2.0 thr=2.0 fit(no 0005)=41.222 fit(no 0011)=40.551 fit(no 0013)=42.727 fit(no 0019)=50.788
+[v2 seed0] motion sc=3.0 thr=0.65 fit(no 0005)=41.244 fit(no 0011)=40.494 fit(no 0013)=42.761 fit(no 0019)=50.815
+[v2 seed0] motion sc=3.0 thr=1.3 fit(no 0005)=41.247 fit(no 0011)=40.529 fit(no 0013)=42.758 fit(no 0019)=50.835
+[v2 seed0] motion sc=3.0 thr=2.0 fit(no 0005)=41.228 fit(no 0011)=40.55 fit(no 0013)=42.727 fit(no 0019)=50.808
+[v2 seed0] motion sc=4.0 thr=0.65 fit(no 0005)=41.249 fit(no 0011)=40.489 fit(no 0013)=42.764 fit(no 0019)=50.832
+[v2 seed0] motion sc=4.0 thr=1.3 fit(no 0005)=41.258 fit(no 0011)=40.525 fit(no 0013)=42.763 fit(no 0019)=50.859
+[v2 seed0] motion sc=4.0 thr=2.0 fit(no 0005)=41.236 fit(no 0011)=40.543 fit(no 0013)=42.732 fit(no 0019)=50.827
+[v2 seed0] motion sc=5.0 thr=0.65 fit(no 0005)=41.252 fit(no 0011)=40.484 fit(no 0013)=42.763 fit(no 0019)=50.846
+[v2 seed0] motion sc=5.0 thr=1.3 fit(no 0005)=41.264 fit(no 0011)=40.517 fit(no 0013)=42.763 fit(no 0019)=50.872
+[v2 seed0] motion sc=5.0 thr=2.0 fit(no 0005)=41.233 fit(no 0011)=40.527 fit(no 0013)=42.724 fit(no 0019)=50.819
+[v2 seed0] motion sc=6.5 thr=0.65 fit(no 0005)=41.256 fit(no 0011)=40.48 fit(no 0013)=42.762 fit(no 0019)=50.863
+[v2 seed0] motion sc=6.5 thr=1.3 fit(no 0005)=41.26 fit(no 0011)=40.504 fit(no 0013)=42.753 fit(no 0019)=50.866
+[v2 seed0] motion sc=6.5 thr=2.0 fit(no 0005)=41.223 fit(no 0011)=40.5 fit(no 0013)=42.71 fit(no 0019)=50.809
+[v2 seed0] fold-best motion: {'0005': (5.0, 1.3), '0011': (2.0, 2.0), '0013': (4.0, 0.65), '0019': (5.0, 1.3)}
+[v2 seed0] appear sc=1.75 thr=0.6 @motion(4.0, 0.65) fit(no 0013)=42.885
+[v2 seed0] appear sc=1.75 thr=1.2 @motion(4.0, 0.65) fit(no 0013)=42.925
+[v2 seed0] appear sc=1.75 thr=1.8 @motion(4.0, 0.65) fit(no 0013)=42.904
+[v2 seed0] appear sc=3.5 thr=0.6 @motion(4.0, 0.65) fit(no 0013)=42.917
+[v2 seed0] appear sc=3.5 thr=1.2 @motion(4.0, 0.65) fit(no 0013)=42.951
+[v2 seed0] appear sc=3.5 thr=1.8 @motion(4.0, 0.65) fit(no 0013)=42.929
+[v2 seed0] appear sc=5.25 thr=0.6 @motion(4.0, 0.65) fit(no 0013)=42.919
+[v2 seed0] appear sc=5.25 thr=1.2 @motion(4.0, 0.65) fit(no 0013)=42.931
+[v2 seed0] appear sc=5.25 thr=1.8 @motion(4.0, 0.65) fit(no 0013)=42.945
+[v2 seed0] appear sc=1.75 thr=0.6 @motion(5.0, 1.3) fit(no 0005)=41.386 fit(no 0019)=50.996
+[v2 seed0] appear sc=1.75 thr=1.2 @motion(5.0, 1.3) fit(no 0005)=41.421 fit(no 0019)=51.058
+[v2 seed0] appear sc=1.75 thr=1.8 @motion(5.0, 1.3) fit(no 0005)=41.392 fit(no 0019)=51.085
+[v2 seed0] appear sc=3.5 thr=0.6 @motion(5.0, 1.3) fit(no 0005)=41.422 fit(no 0019)=51.048
+[v2 seed0] appear sc=3.5 thr=1.2 @motion(5.0, 1.3) fit(no 0005)=41.457 fit(no 0019)=51.125
+[v2 seed0] appear sc=3.5 thr=1.8 @motion(5.0, 1.3) fit(no 0005)=41.434 fit(no 0019)=51.172
+[v2 seed0] appear sc=5.25 thr=0.6 @motion(5.0, 1.3) fit(no 0005)=41.429 fit(no 0019)=51.091
+[v2 seed0] appear sc=5.25 thr=1.2 @motion(5.0, 1.3) fit(no 0005)=41.444 fit(no 0019)=51.179
+[v2 seed0] appear sc=5.25 thr=1.8 @motion(5.0, 1.3) fit(no 0005)=41.46 fit(no 0019)=51.22
+[v2 seed0] appear sc=1.75 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.699
+[v2 seed0] appear sc=1.75 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.765
+[v2 seed0] appear sc=1.75 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.769
+[v2 seed0] appear sc=3.5 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.724
+[v2 seed0] appear sc=3.5 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.79
+[v2 seed0] appear sc=3.5 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.8
+[v2 seed0] appear sc=5.25 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.723
+[v2 seed0] appear sc=5.25 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.763
+[v2 seed0] appear sc=5.25 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.819
+[v2 seed0] HELD-OUT 0005: motion(sc=5.0,thr=1.3) appear(sc=5.25,thr=1.8) pooled=58.233 moving=58.033
+[v2 seed0] HELD-OUT 0011: motion(sc=2.0,thr=2.0) appear(sc=5.25,thr=1.8) pooled=52.296 moving=43.79
+[v2 seed0] HELD-OUT 0013: motion(sc=4.0,thr=0.65) appear(sc=3.5,thr=1.2) pooled=41.111 moving=47.299
+[v2 seed0] HELD-OUT 0019: motion(sc=5.0,thr=1.3) appear(sc=5.25,thr=1.8) pooled=38.434 moving=40.595
+[v2 seed0] LOSO pooled=42.723 moving=48.388 (4329s)
+[v2 seed1] motion sc=2.0 thr=0.65 fit(no 0005)=41.221 fit(no 0011)=40.482 fit(no 0013)=42.745 fit(no 0019)=50.767
+[v2 seed1] motion sc=2.0 thr=1.3 fit(no 0005)=41.226 fit(no 0011)=40.518 fit(no 0013)=42.741 fit(no 0019)=50.791
+[v2 seed1] motion sc=2.0 thr=2.0 fit(no 0005)=41.209 fit(no 0011)=40.54 fit(no 0013)=42.719 fit(no 0019)=50.771
+[v2 seed1] motion sc=3.0 thr=0.65 fit(no 0005)=41.226 fit(no 0011)=40.478 fit(no 0013)=42.744 fit(no 0019)=50.781
+[v2 seed1] motion sc=3.0 thr=1.3 fit(no 0005)=41.23 fit(no 0011)=40.514 fit(no 0013)=42.743 fit(no 0019)=50.803
+[v2 seed1] motion sc=3.0 thr=2.0 fit(no 0005)=41.208 fit(no 0011)=40.526 fit(no 0013)=42.711 fit(no 0019)=50.772
+[v2 seed1] motion sc=4.0 thr=0.65 fit(no 0005)=41.229 fit(no 0011)=40.472 fit(no 0013)=42.744 fit(no 0019)=50.793
+[v2 seed1] motion sc=4.0 thr=1.3 fit(no 0005)=41.232 fit(no 0011)=40.503 fit(no 0013)=42.742 fit(no 0019)=50.813
+[v2 seed1] motion sc=4.0 thr=2.0 fit(no 0005)=41.205 fit(no 0011)=40.511 fit(no 0013)=42.705 fit(no 0019)=50.772
+[v2 seed1] motion sc=5.0 thr=0.65 fit(no 0005)=41.232 fit(no 0011)=40.468 fit(no 0013)=42.745 fit(no 0019)=50.807
+[v2 seed1] motion sc=5.0 thr=1.3 fit(no 0005)=41.227 fit(no 0011)=40.49 fit(no 0013)=42.736 fit(no 0019)=50.811
+[v2 seed1] motion sc=5.0 thr=2.0 fit(no 0005)=41.198 fit(no 0011)=40.493 fit(no 0013)=42.696 fit(no 0019)=50.759
+[v2 seed1] motion sc=6.5 thr=0.65 fit(no 0005)=41.23 fit(no 0011)=40.457 fit(no 0013)=42.742 fit(no 0019)=50.825
+[v2 seed1] motion sc=6.5 thr=1.3 fit(no 0005)=41.223 fit(no 0011)=40.467 fit(no 0013)=42.725 fit(no 0019)=50.808
+[v2 seed1] motion sc=6.5 thr=2.0 fit(no 0005)=41.186 fit(no 0011)=40.461 fit(no 0013)=42.683 fit(no 0019)=50.74
+[v2 seed1] fold-best motion: {'0005': (4.0, 1.3), '0011': (2.0, 2.0), '0013': (2.0, 0.65), '0019': (6.5, 0.65)}
+[v2 seed1] appear sc=1.75 thr=0.6 @motion(2.0, 0.65) fit(no 0013)=42.869
+[v2 seed1] appear sc=1.75 thr=1.2 @motion(2.0, 0.65) fit(no 0013)=42.893
+[v2 seed1] appear sc=1.75 thr=1.8 @motion(2.0, 0.65) fit(no 0013)=42.873
+[v2 seed1] appear sc=3.5 thr=0.6 @motion(2.0, 0.65) fit(no 0013)=42.898
+[v2 seed1] appear sc=3.5 thr=1.2 @motion(2.0, 0.65) fit(no 0013)=42.923
+[v2 seed1] appear sc=3.5 thr=1.8 @motion(2.0, 0.65) fit(no 0013)=42.914
+[v2 seed1] appear sc=5.25 thr=0.6 @motion(2.0, 0.65) fit(no 0013)=42.899
+[v2 seed1] appear sc=5.25 thr=1.2 @motion(2.0, 0.65) fit(no 0013)=42.928
+[v2 seed1] appear sc=5.25 thr=1.8 @motion(2.0, 0.65) fit(no 0013)=42.92
+[v2 seed1] appear sc=1.75 thr=0.6 @motion(4.0, 1.3) fit(no 0005)=41.358
+[v2 seed1] appear sc=1.75 thr=1.2 @motion(4.0, 1.3) fit(no 0005)=41.376
+[v2 seed1] appear sc=1.75 thr=1.8 @motion(4.0, 1.3) fit(no 0005)=41.342
+[v2 seed1] appear sc=3.5 thr=0.6 @motion(4.0, 1.3) fit(no 0005)=41.391
+[v2 seed1] appear sc=3.5 thr=1.2 @motion(4.0, 1.3) fit(no 0005)=41.41
+[v2 seed1] appear sc=3.5 thr=1.8 @motion(4.0, 1.3) fit(no 0005)=41.381
+[v2 seed1] appear sc=5.25 thr=0.6 @motion(4.0, 1.3) fit(no 0005)=41.398
+[v2 seed1] appear sc=5.25 thr=1.2 @motion(4.0, 1.3) fit(no 0005)=41.41
+[v2 seed1] appear sc=5.25 thr=1.8 @motion(4.0, 1.3) fit(no 0005)=41.383
+[v2 seed1] appear sc=1.75 thr=0.6 @motion(6.5, 0.65) fit(no 0019)=50.929
+[v2 seed1] appear sc=1.75 thr=1.2 @motion(6.5, 0.65) fit(no 0019)=50.976
+[v2 seed1] appear sc=1.75 thr=1.8 @motion(6.5, 0.65) fit(no 0019)=51.0
+[v2 seed1] appear sc=3.5 thr=0.6 @motion(6.5, 0.65) fit(no 0019)=50.973
+[v2 seed1] appear sc=3.5 thr=1.2 @motion(6.5, 0.65) fit(no 0019)=51.001
+[v2 seed1] appear sc=3.5 thr=1.8 @motion(6.5, 0.65) fit(no 0019)=51.017
+[v2 seed1] appear sc=5.25 thr=0.6 @motion(6.5, 0.65) fit(no 0019)=50.995
+[v2 seed1] appear sc=5.25 thr=1.2 @motion(6.5, 0.65) fit(no 0019)=51.017
+[v2 seed1] appear sc=5.25 thr=1.8 @motion(6.5, 0.65) fit(no 0019)=50.999
+[v2 seed1] appear sc=1.75 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.687
+[v2 seed1] appear sc=1.75 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.738
+[v2 seed1] appear sc=1.75 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.736
+[v2 seed1] appear sc=3.5 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.708
+[v2 seed1] appear sc=3.5 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.755
+[v2 seed1] appear sc=3.5 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.753
+[v2 seed1] appear sc=5.25 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.704
+[v2 seed1] appear sc=5.25 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.738
+[v2 seed1] appear sc=5.25 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.74
+[v2 seed1] HELD-OUT 0005: motion(sc=4.0,thr=1.3) appear(sc=3.5,thr=1.2) pooled=58.236 moving=58.037
+[v2 seed1] HELD-OUT 0011: motion(sc=2.0,thr=2.0) appear(sc=3.5,thr=1.2) pooled=52.459 moving=43.682
+[v2 seed1] HELD-OUT 0013: motion(sc=2.0,thr=0.65) appear(sc=5.25,thr=1.2) pooled=40.854 moving=47.239
+[v2 seed1] HELD-OUT 0019: motion(sc=6.5,thr=0.65) appear(sc=3.5,thr=1.8) pooled=38.378 moving=38.143
+[v2 seed1] LOSO pooled=42.689 moving=47.809 (4376s)
+[v2 seed2] motion sc=2.0 thr=0.65 fit(no 0005)=41.223 fit(no 0011)=40.488 fit(no 0013)=42.746 fit(no 0019)=50.764
+[v2 seed2] motion sc=2.0 thr=1.3 fit(no 0005)=41.235 fit(no 0011)=40.521 fit(no 0013)=42.746 fit(no 0019)=50.799
+[v2 seed2] motion sc=2.0 thr=2.0 fit(no 0005)=41.221 fit(no 0011)=40.548 fit(no 0013)=42.726 fit(no 0019)=50.778
+[v2 seed2] motion sc=3.0 thr=0.65 fit(no 0005)=41.23 fit(no 0011)=40.484 fit(no 0013)=42.745 fit(no 0019)=50.78
+[v2 seed2] motion sc=3.0 thr=1.3 fit(no 0005)=41.241 fit(no 0011)=40.516 fit(no 0013)=42.745 fit(no 0019)=50.803
+[v2 seed2] motion sc=3.0 thr=2.0 fit(no 0005)=41.224 fit(no 0011)=40.539 fit(no 0013)=42.723 fit(no 0019)=50.775
+[v2 seed2] motion sc=4.0 thr=0.65 fit(no 0005)=41.237 fit(no 0011)=40.477 fit(no 0013)=42.746 fit(no 0019)=50.8
+[v2 seed2] motion sc=4.0 thr=1.3 fit(no 0005)=41.245 fit(no 0011)=40.51 fit(no 0013)=42.745 fit(no 0019)=50.81
+[v2 seed2] motion sc=4.0 thr=2.0 fit(no 0005)=41.23 fit(no 0011)=40.53 fit(no 0013)=42.722 fit(no 0019)=50.786
+[v2 seed2] motion sc=5.0 thr=0.65 fit(no 0005)=41.241 fit(no 0011)=40.472 fit(no 0013)=42.745 fit(no 0019)=50.807
+[v2 seed2] motion sc=5.0 thr=1.3 fit(no 0005)=41.252 fit(no 0011)=40.503 fit(no 0013)=42.745 fit(no 0019)=50.819
+[v2 seed2] motion sc=5.0 thr=2.0 fit(no 0005)=41.23 fit(no 0011)=40.522 fit(no 0013)=42.715 fit(no 0019)=50.78
+[v2 seed2] motion sc=6.5 thr=0.65 fit(no 0005)=41.24 fit(no 0011)=40.464 fit(no 0013)=42.741 fit(no 0019)=50.81
+[v2 seed2] motion sc=6.5 thr=1.3 fit(no 0005)=41.25 fit(no 0011)=40.489 fit(no 0013)=42.737 fit(no 0019)=50.815
+[v2 seed2] motion sc=6.5 thr=2.0 fit(no 0005)=41.225 fit(no 0011)=40.502 fit(no 0013)=42.705 fit(no 0019)=50.764
+[v2 seed2] fold-best motion: {'0005': (5.0, 1.3), '0011': (2.0, 2.0), '0013': (2.0, 0.65), '0019': (5.0, 1.3)}
+[v2 seed2] appear sc=1.75 thr=0.6 @motion(2.0, 0.65) fit(no 0013)=42.885
+[v2 seed2] appear sc=1.75 thr=1.2 @motion(2.0, 0.65) fit(no 0013)=42.935
+[v2 seed2] appear sc=1.75 thr=1.8 @motion(2.0, 0.65) fit(no 0013)=42.919
+[v2 seed2] appear sc=3.5 thr=0.6 @motion(2.0, 0.65) fit(no 0013)=42.955
+[v2 seed2] appear sc=3.5 thr=1.2 @motion(2.0, 0.65) fit(no 0013)=42.991
+[v2 seed2] appear sc=3.5 thr=1.8 @motion(2.0, 0.65) fit(no 0013)=42.995
+[v2 seed2] appear sc=5.25 thr=0.6 @motion(2.0, 0.65) fit(no 0013)=42.998
+[v2 seed2] appear sc=5.25 thr=1.2 @motion(2.0, 0.65) fit(no 0013)=43.043
+[v2 seed2] appear sc=5.25 thr=1.8 @motion(2.0, 0.65) fit(no 0013)=43.038
+[v2 seed2] appear sc=1.75 thr=0.6 @motion(5.0, 1.3) fit(no 0005)=41.391 fit(no 0019)=50.944
+[v2 seed2] appear sc=1.75 thr=1.2 @motion(5.0, 1.3) fit(no 0005)=41.436 fit(no 0019)=51.001
+[v2 seed2] appear sc=1.75 thr=1.8 @motion(5.0, 1.3) fit(no 0005)=41.404 fit(no 0019)=51.006
+[v2 seed2] appear sc=3.5 thr=0.6 @motion(5.0, 1.3) fit(no 0005)=41.462 fit(no 0019)=51.0
+[v2 seed2] appear sc=3.5 thr=1.2 @motion(5.0, 1.3) fit(no 0005)=41.491 fit(no 0019)=51.028
+[v2 seed2] appear sc=3.5 thr=1.8 @motion(5.0, 1.3) fit(no 0005)=41.489 fit(no 0019)=51.07
+[v2 seed2] appear sc=5.25 thr=0.6 @motion(5.0, 1.3) fit(no 0005)=41.501 fit(no 0019)=51.03
+[v2 seed2] appear sc=5.25 thr=1.2 @motion(5.0, 1.3) fit(no 0005)=41.543 fit(no 0019)=51.082
+[v2 seed2] appear sc=5.25 thr=1.8 @motion(5.0, 1.3) fit(no 0005)=41.542 fit(no 0019)=51.123
+[v2 seed2] appear sc=1.75 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.709
+[v2 seed2] appear sc=1.75 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.787
+[v2 seed2] appear sc=1.75 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.797
+[v2 seed2] appear sc=3.5 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.775
+[v2 seed2] appear sc=3.5 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.835
+[v2 seed2] appear sc=3.5 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.867
+[v2 seed2] appear sc=5.25 thr=0.6 @motion(2.0, 2.0) fit(no 0011)=40.809
+[v2 seed2] appear sc=5.25 thr=1.2 @motion(2.0, 2.0) fit(no 0011)=40.881
+[v2 seed2] appear sc=5.25 thr=1.8 @motion(2.0, 2.0) fit(no 0011)=40.913
+[v2 seed2] HELD-OUT 0005: motion(sc=5.0,thr=1.3) appear(sc=5.25,thr=1.2) pooled=58.142 moving=57.91
+[v2 seed2] HELD-OUT 0011: motion(sc=2.0,thr=2.0) appear(sc=5.25,thr=1.8) pooled=52.3 moving=43.771
+[v2 seed2] HELD-OUT 0013: motion(sc=2.0,thr=0.65) appear(sc=5.25,thr=1.2) pooled=41.011 moving=47.3
+[v2 seed2] HELD-OUT 0019: motion(sc=5.0,thr=1.3) appear(sc=5.25,thr=1.8) pooled=38.553 moving=40.266
+[v2 seed2] LOSO pooled=42.814 moving=48.264 (4331s)
+
+Wrote /home/seanachan/GMC-Link/hota_eval_loso_flexhook_v2/loso_results.json
+LOSO pooled HOTA n=3: 42.742 +- 0.065 (in-sample ship 42.807 +- 0.038)

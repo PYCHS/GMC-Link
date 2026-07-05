@@ -82,8 +82,13 @@ seeds 3–4 pipeline log `paper/repro_logs/e2_chain.log`; seeds 0–2 re-evals
 ## Sec 4.1 — LOSO calibration check
 
 ```bash
-python run_loso_calibration.py --seeds 0 1 2
+python run_loso_calibration.py --seeds 0 1 2                      # iKUN
+python run_loso_calibration_flexhook.py --host v1 --seeds 0 1 2   # FH V1 (3-fold)
+python run_loso_calibration_flexhook.py --host v2 --seeds 0 1 2   # FH V2 (4-fold)
 ```
+FlexHook numbers: V1 LOSO pooled 53.276 ± 0.168, V2 LOSO pooled 42.742 ± 0.065
+(V2 stays above published 42.526). Results JSONs:
+`hota_eval_loso_flexhook_v{1,2}/loso_results.json`; log `paper/repro_logs/loso_fh.log`.
 Script: `run_loso_calibration.py` (grids + protocol in docstring).
 Results JSON: `hota_eval_loso_calibration/loso_results.json` (committed, c715e64).
 Full sweep log: `paper/repro_logs/loso.log`.
