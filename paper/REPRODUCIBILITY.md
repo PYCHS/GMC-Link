@@ -106,7 +106,7 @@ references printed by the inline snippet recorded in the log tail of the session
 | Nine per-class pooled deltas all positive (n=3) | `run_per_class_multiseed_eval.py`; record: memory `project_per_class_pool_all_positive` |
 | Feature-level injection −21.7% F1 | Historical diagnostic, prior pipeline (RESEARCH_NOTES.md Exp — feature-level CLIP injection); not rerun on ship stack |
 | Appearance re-ranker stack 45.612 | CLIP-L/14 spatial rerank, commits 2091c84/efc7372/9699e7b; record: memory `project_appearance_rerank_clipL14_2026_06_01` |
-| GMC module 57–61 FPS CPU | Profiling over ORB+homography+descriptor+alignment stages (RESEARCH_NOTES.md) |
+| GMC module ~68 FPS (14.8 ms/frame E2E; ORB homography 14.55 ms CPU, aligner <0.2 ms) | `python profile_inference.py --component all` (2026-04-30); record: memory `project_inference_profile` (ORB+homography CPU 68.7 fps, E2E 67.6 fps, ~6.7× real-time at 10 Hz KITTI). NOTE: `profile_inference.py` not currently at repo root — rerun requires restoring it from the origin session/commit. |
 | VMRMOT 53.00/35.21 | VMRMOT paper (arXiv 2511.17681) |
 | std-matching auto-derive NEG | memory `project_variant_b_std_matching_negative_2026_05_21` |
 | Learned fusion head NEG (HOTA −3.79) | `gmc_link/fusion_head.py` (legacy); memory `project_flexhook_learned_fusion_negative` |

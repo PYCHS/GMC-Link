@@ -249,7 +249,7 @@ The injection site is as consequential as the signal. Injecting motion features 
 \label{fig:qual}
 \end{figure}
 
-The GMC module runs at roughly $57$--$61$ FPS on a CPU (timed over the ORB, homography, descriptor, and alignment stages, excluding the host's own inference), about $6\times$ the benchmark's $10$~fps capture rate, so the compensation adds no practical inference burden.\footnote{A separate appearance re-ranker, orthogonal to this paper's motion contribution and targeting the appearance majority rather than the motion class, stacks on iKUN to $45.612$ pooled HOTA ($n{=}3$); we note it only to bound what the motion module alone contributes and do not claim it here.}
+The GMC module runs at roughly $68$ FPS, a median $14.8$\,ms per frame end-to-end (timed over the ORB homography, descriptor, and alignment stages, excluding the host's own inference), of which the ORB homography on CPU is the bottleneck at $14.55$\,ms while the aligner forward is under $0.2$\,ms --- about $6.7\times$ the benchmark's $10$~fps capture rate, so the compensation adds no practical inference burden.\footnote{A separate appearance re-ranker, orthogonal to this paper's motion contribution and targeting the appearance majority rather than the motion class, stacks on iKUN to $45.612$ pooled HOTA ($n{=}3$); we note it only to bound what the motion module alone contributes and do not claim it here.}
 
 \section{Conclusion and Limitations}
 \label{sec:conclusion}

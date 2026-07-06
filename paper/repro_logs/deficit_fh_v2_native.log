@@ -1,0 +1,13 @@
+Loading FlexHook V2 result_0.json (/home/seanachan/FlexHook/retest-kitti-2/refer-kitti-v2-best/result_0.json)...
+Loading GMC V2 caches...
+Loading tracks...
+
+=== a0.0_scale10.0_thr0.0_aa0.0_sca3.5_thra0.0: motion(α=0.0, sc=10.0, thr=0.0) appear(α=0.0, sc=3.5, thr=0.0) static(α=0.0, sc=0.0, thr=0.0) ===
+  pooled=42.526  APPEAR=41.713  MOVING=48.018  STATIC=44.868
+
+=== FlexHook V2 Phase 5 + GMC sweep summary ===
+tag                           α_m  sc_m thr_m  α_a  sc_a thr_a   α_s  sc_s thr_s   pooled   APPEAR   MOVING   STATIC
+a0.0_scale10.0_thr0.0_aa0.0_sca3.5_thra0.0 0.00  10.0 +0.00 0.00   3.5 +0.00 +0.00   0.0 +0.00   42.526   41.713   48.018   44.868
+
+FlexHook V2 paper claim: 42.526
+V2 motion+appear ship: 42.799
