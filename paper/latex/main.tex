@@ -65,7 +65,16 @@ Two mature lines run in parallel without meeting. Motion-language RMOT fuses obj
 \section{Method}
 \label{sec:method}
 
-GMC-Link sits between an RMOT host and its scoring step. It assumes a two-stage, referring-by-tracking host interface --- tracked boxes and a per-track, per-expression score to correct --- which both hosts we study expose. It reads the host's tracked boxes, estimates how the camera moved, subtracts that motion from each object's trajectory, aligns the residual kinematics with the referring expression, and adds a calibrated correction to the host logit. No host weight is retrained and no detector is replaced; each host receives a small per-axis scalar calibration. Figure~\ref{fig:pipeline} shows the four stages.
+GMC-Link sits between an RMOT host and its scoring step. It assumes a two-stage, referring-by-tracking host interface --- tracked boxes and a per-track, per-expression score to correct --- which both hosts we study expose. It reads the host's tracked boxes, estimates how the camera moved, subtracts that motion from each object's trajectory, aligns the residual kinematics with the referring expression, and adds a calibrated correction to the host logit. No host weight is retrained and no detector is replaced; each host receives a small per-axis scalar calibration. Figure~\ref{fig:architecture} gives the architecture-level view of this attachment point, and Figure~\ref{fig:pipeline} shows the four stages.
+
+The architecture separates three responsibilities that are otherwise entangled in camera-naive RMOT hosts. The host remains responsible for detection, association, and appearance-language grounding; the GMC branch independently estimates background camera motion and converts the host's track boxes into residual object motion; the fusion layer then treats the motion-language score as a calibrated correction rather than as a replacement for the host score. This separation is the reason the module can be attached after host inference without retraining the host or changing its detector.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/Architecture.png}
+\caption{\textbf{GMC-Link architecture.} The RMOT host provides tracked boxes and a host expression score. GMC-Link estimates inter-frame camera motion from the video, derives ego-compensated residual motion from the host tracks, aligns that motion descriptor with the referring expression, and sends only a calibrated score correction back to the host decision layer. The host's appearance pathway and tracker remain unchanged.}
+\label{fig:architecture}
+\end{figure*}
 
 \begin{figure}[t]
 \centering
