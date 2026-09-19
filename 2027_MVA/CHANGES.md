@@ -11,6 +11,29 @@
 
 ---
 
+## paper-2026-09-19 — `gmc_v3.tex`(對 `paper-2026-08-31`)
+
+本輪主軸:A46(TransRMOT 第三 host)寫入 + 表格/版面照社群慣例重排。2026-09-13 審查小組(5-reviewer 模擬,record 本地)的修正**不在此版**:issue #40(數字/事實)、#41(敘事/版面)→ draft PR #42/#43,下個版本合入。
+
+### [編輯] — A46:TransRMOT 第三 host 寫入(182f58e, bf8cd7b)
+
+- Table 1/2 加 TransRMOT 列:two-α (0.7, 0.5)、46.149±0.025 pooled / MOVING +1.43;單調 host-deficit 主張恢復(四設定);雙 published 分數(46.56 前 / 38.06 後 community 修正)與 frame-convention 揭露;scope 擴到 end-to-end query-based hosts;native 45.757(gt_template 約定)由 α=0 逐位重現。
+- Side-track 已記錄未進稿:S2 router audit(150 條獨立語意標註 vs `moving_kw.classify` = 150/150)、S1 ego-magnitude 分層(MOVING ρ=0.41 p=0.065,弱)。
+
+### [編輯] — 權重表 + Table 2 社群慣例重排(71c13db, 4ebe332, 9662ca4, fada153, 95336e0, 265e7c6, 96190f1, 8e23cc3)
+
+- 四句 per-host α 白話句改為 LOSO 權重表(tab:alphas),FlexHook 退化路由表格可見;表源碼移入 §4.1 Setup,浮動落在引用段旁。
+- Table 2 改社群主表慣例:benchmark 分段列、host / +GMC 成對列、HOTA/DetA/AssA 欄、較佳值 bold、$^*$ = reproduced;per-cell std 移除(顯著性由 Table 3 與內文承載)。
+- Baseline 政策(使用者決定 2026-09-13,8b0649a):published-anchored(iKUN 44.56 published、TransRMOT 45.757$^*$ 重現);485fb71 的 uniform-reproduced 方案捨棄。
+
+### [編輯] — 版面與 diff 工具鏈(4b44eb7, e1db17b, 37b030e, 9662ca4, 01963f4, 03899c2, 0030b77, 0ec8cc9)
+
+- 浮動全 [t](第 4 頁右欄曾塌成純浮動欄)、floatsep/captionskip 修正(caption 在表上方)、四表 `tabular*` 滿欄寬。
+- `rebuild_diff.sh` = canonical v3+diff 建置指令(latexdiff PICTUREENV 含 table:改動表格以最終形呈現 + caption 藍色 [changed] 標;perl 規則修 `\hline`/`\multicolumn` 前的 DIF 標記)。
+- 文字微調:exceed-published 句縮一行並點名 host(7295e1e, 56c82d7)、Welch 句配對釐清(b40d1a1)、LOSO 縮寫首現定義(5f7f97a)、Table 3 段只引極值(f30bc20)、ablation 內文 std 錨點精簡(f6edafc)。
+
+版面:5 頁、0 overfull;**正文收在第 5 頁頂**(結論尾 ~11 行)後接參考文獻 — 超出 4 頁正文預算,留給 #41 版面輪處理。
+
 ## paper-2026-08-31 — `gmc_v3.tex`(對 `paper-2026-08-30`)
 
 ### [編輯] — latexdiff 基準改為教授版(release 後修正)
