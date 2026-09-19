@@ -15,10 +15,11 @@
 
 本輪主軸:A46(TransRMOT 第三 host)寫入 + 表格/版面照社群慣例重排。2026-09-13 審查小組(5-reviewer 模擬,record 本地)的修正**不在此版**:issue #40(數字/事實)、#41(敘事/版面)→ draft PR #42/#43,下個版本合入。
 
-### [編輯] — Table 1 欄標題改 (moving class) / (other class)(release 後同日修正,assets 已更新)
+### [編輯] — Table 1 欄標題改 (moving class) / (other class);α_app 下標改 α_oth(release 後同日修正,assets 已更新)
 
-- 由 `(moving/static)` / `(appearance)` 改為 `(moving class)` / `(other class)`,作者指示,用語對齊 Table 3 的 Moving/Others 欄。
-- **路由不變**:程式仍是 MOVING/STATIC → α_mot、APPEARANCE → α_app(`run_ikun_linear_additive.py:116`;A43)。static 表達式實際吃 α_mot——新欄標把 static 歸「other」側,與程式路由不一致,作者知情決定(2026-09-19)。
+- 由 `(moving/static)` / `(appearance)` 改為 `(moving class)` / `(other class)`,作者指示,用語對齊 Table 3 的 Moving/Others 欄(ae95224)。
+- 下標同步:$\alpha_{\mathrm{app}}$ → $\alpha_{\mathrm{oth}}$ 三處(Table 1 表頭、Table 4 caption 的 single-α 式、§5「receive the other-class weight」);$\alpha_{\mathrm{mot}}$ 與通用 $\alpha_c$ 不動(7e59d06)。
+- **路由不變**:程式仍是 MOVING/STATIC → α_mot、APPEARANCE → α_oth(`run_ikun_linear_additive.py:116`;A43)。static 表達式實際吃 α_mot——新欄標把 static 歸「other」側,與程式路由不一致,作者知情決定(2026-09-19)。
 
 ### [編輯] — A46:TransRMOT 第三 host 寫入(182f58e, bf8cd7b)
 
