@@ -1,7 +1,7 @@
 % Template for ICASSP-2024 paper; to be used with:
 %DIF LATEXDIFF DIFFERENCE FILE
 %DIF DEL gmc_v2_1.tex   Sat Sep 12 22:09:57 2026
-%DIF ADD gmc_v3.tex     Sat Sep 19 11:12:34 2026
+%DIF ADD gmc_v3.tex     Sat Sep 19 15:02:14 2026
 %          spconf.sty  - ICASSP/ICIP LaTeX style file, and
 %          IEEEbib.bst - IEEE bibliography style file.
 % --------------------------------------------------------------------------
@@ -322,7 +322,7 @@ Refer-KITTI does not provide a dedicated validation split. All fusion weights ar
   \footnotesize
   \begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lcc}
     \hline
-    Host        & $\alpha_{\mathrm{mot}}$ (moving class) & $\alpha_{\mathrm{app}}$ (other class) \\
+    Host        & $\alpha_{\mathrm{mot}}$ (moving class) & $\alpha_{\mathrm{oth}}$ (other class) \\
     \hline
     iKUN        & 1.0 & 0.1 \\
     TransRMOT   & 0.7 & 0.5 \\
@@ -439,7 +439,7 @@ Table~\ref{tab:ablation} reports the five-seed ablation measurements when iKUN i
 %DIF < Both drops are significant under Welch's $t$-test ($n{=}5$; ego: $t{=}11.8$ moving-class, $11.7$ pooled; multi-scale: $t{=}6.2$ and $6.7$; all $p{<}0.01$), and ego-motion compensation accounts for the larger share.
 \DIFaddbegin \begin{table}[t]
   \centering
-  \caption{\DIFaddFL{[changed] }Per-class HOTA ablation on iKUN ($n{=}5$ seeds); single $\alpha$: $\alpha_{\mathrm{mot}}{=}\alpha_{\mathrm{app}}{=}0.35$ (LOSO). Others $=$ all expressions outside the moving class.}
+  \caption{\DIFaddFL{[changed] }Per-class HOTA ablation on iKUN ($n{=}5$ seeds); single $\alpha$: $\alpha_{\mathrm{mot}}{=}\alpha_{\mathrm{oth}}{=}0.35$ (LOSO). Others $=$ all expressions outside the moving class.}
   \label{tab:ablation}
   \footnotesize
   \setlength{\tabcolsep}{2pt}
@@ -491,9 +491,9 @@ Figure~\ref{fig:qual} shows a sample tracking result. The parked car appears to 
 \label{sec:conclusion}
 The GMC module is a plug-in that improves motion grounding in referring multi-object tracking without modifying the detector, tracker, or appearance-language matching model. By compensating for camera motion and matching residual motion features with language expressions, the proposed module helps distinguish object motion from camera-induced motion. Road-region background correspondences provide a geometric reference for estimating camera motion in driving videos. The residual motion features are then matched against language expressions to yield a matching score, which is integrated with the host model's prediction score via late fusion. On the Refer-KITTI datasets, the pooled HOTA improves for different host models. \DIFdelbegin \DIFdel{For movement-related }\DIFdelend \DIFaddbegin \DIFadd{On the moving-class }\DIFaddend expressions, the largest gain is observed when iKUN is used as the host model \DIFaddbegin \DIFadd{($+9.44\pm0.92$)}\DIFaddend .
 
-Despite these promising results, several limitations remain. First, the road-plane homography assumes a flat ground plane. Scenes with steep slopes or uneven terrain fall outside the model's scope. Second, \DIFdelbegin \DIFdel{a keyword classifier decides which weightan expression is associated with. Therefore, a misread expression gets the incorrect fusion weight. %DIF < $14$ of the $126$ direction expressions in Refer-KITTI V1 are treated as appearance. 
+Despite these promising results, several limitations remain. First, the road-plane homography assumes a flat ground plane. Scenes with steep slopes or uneven terrain fall outside the model's scope. Second, \DIFdelbegin \DIFdel{a keyword classifier decides which weight an expression is associated with. Therefore, a misread expression gets the incorrect fusion weight. %DIF < $14$ of the $126$ direction expressions in Refer-KITTI V1 are treated as appearance. 
 %DIF < Third, two weights do not help every host. On both FlexHook settings the leave-one-sequence-out procedure selects a single weight. 
-}\DIFdelend \DIFaddbegin \DIFadd{the keyword classifier routes only moving-class expressions to $\alpha_{\mathrm{mot}}$; direction and turning expressions ($214$ of the $818$ in Refer-KITTI V1) receive the appearance weight, so the module does not help them even though they describe motion. }\DIFaddend Finally, our experiments are conducted on \DIFdelbegin \DIFdel{two RMOT frameworks and }\DIFdelend \DIFaddbegin \DIFadd{three RMOT frameworks but only on }\DIFaddend the Refer-KITTI benchmarks. Additional evaluations \DIFdelbegin \DIFdel{across more host models and }\DIFdelend \DIFaddbegin \DIFadd{on other }\DIFaddend datasets are needed to further validate the generality of the proposed approach.
+}\DIFdelend \DIFaddbegin \DIFadd{the keyword classifier routes only moving-class expressions to $\alpha_{\mathrm{mot}}$; direction and turning expressions ($214$ of the $818$ in Refer-KITTI V1) receive the other-class weight $\alpha_{\mathrm{oth}}$, so the module does not help them even though they describe motion. }\DIFaddend Finally, our experiments are conducted on \DIFdelbegin \DIFdel{two RMOT frameworks and }\DIFdelend \DIFaddbegin \DIFadd{three RMOT frameworks but only on }\DIFaddend the Refer-KITTI benchmarks. Additional evaluations \DIFdelbegin \DIFdel{across more host models and }\DIFdelend \DIFaddbegin \DIFadd{on other }\DIFaddend datasets are needed to further validate the generality of the proposed approach.
 \DIFdelbegin %DIFDELCMD < 
 
 %DIFDELCMD < %%%

@@ -166,7 +166,7 @@ Refer-KITTI does not provide a dedicated validation split. All fusion weights ar
   \footnotesize
   \begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lcc}
     \hline
-    Host        & $\alpha_{\mathrm{mot}}$ (moving class) & $\alpha_{\mathrm{app}}$ (other class) \\
+    Host        & $\alpha_{\mathrm{mot}}$ (moving class) & $\alpha_{\mathrm{oth}}$ (other class) \\
     \hline
     iKUN        & 1.0 & 0.1 \\
     TransRMOT   & 0.7 & 0.5 \\
@@ -236,7 +236,7 @@ Table~\ref{tab:ablation} reports the five-seed ablation measurements when iKUN i
 
 \begin{table}[t]
   \centering
-  \caption{Per-class HOTA ablation on iKUN ($n{=}5$ seeds); single $\alpha$: $\alpha_{\mathrm{mot}}{=}\alpha_{\mathrm{app}}{=}0.35$ (LOSO). Others $=$ all expressions outside the moving class.}
+  \caption{Per-class HOTA ablation on iKUN ($n{=}5$ seeds); single $\alpha$: $\alpha_{\mathrm{mot}}{=}\alpha_{\mathrm{oth}}{=}0.35$ (LOSO). Others $=$ all expressions outside the moving class.}
   \label{tab:ablation}
   \footnotesize
   \setlength{\tabcolsep}{2pt}
@@ -266,7 +266,7 @@ Figure~\ref{fig:qual} shows a sample tracking result. The parked car appears to 
 \label{sec:conclusion}
 The GMC module is a plug-in that improves motion grounding in referring multi-object tracking without modifying the detector, tracker, or appearance-language matching model. By compensating for camera motion and matching residual motion features with language expressions, the proposed module helps distinguish object motion from camera-induced motion. Road-region background correspondences provide a geometric reference for estimating camera motion in driving videos. The residual motion features are then matched against language expressions to yield a matching score, which is integrated with the host model's prediction score via late fusion. On the Refer-KITTI datasets, the pooled HOTA improves for different host models. On the moving-class expressions, the largest gain is observed when iKUN is used as the host model ($+9.44\pm0.92$).
 
-Despite these promising results, several limitations remain. First, the road-plane homography assumes a flat ground plane. Scenes with steep slopes or uneven terrain fall outside the model's scope. Second, the keyword classifier routes only moving-class expressions to $\alpha_{\mathrm{mot}}$; direction and turning expressions ($214$ of the $818$ in Refer-KITTI V1) receive the appearance weight, so the module does not help them even though they describe motion. Finally, our experiments are conducted on three RMOT frameworks but only on the Refer-KITTI benchmarks. Additional evaluations on other datasets are needed to further validate the generality of the proposed approach.
+Despite these promising results, several limitations remain. First, the road-plane homography assumes a flat ground plane. Scenes with steep slopes or uneven terrain fall outside the model's scope. Second, the keyword classifier routes only moving-class expressions to $\alpha_{\mathrm{mot}}$; direction and turning expressions ($214$ of the $818$ in Refer-KITTI V1) receive the other-class weight $\alpha_{\mathrm{oth}}$, so the module does not help them even though they describe motion. Finally, our experiments are conducted on three RMOT frameworks but only on the Refer-KITTI benchmarks. Additional evaluations on other datasets are needed to further validate the generality of the proposed approach.
 
 % References should be produced using the bibtex program from suitable
 % BiBTeX files (here: strings, refs, manuals). The IEEEbib.bst bibliography
